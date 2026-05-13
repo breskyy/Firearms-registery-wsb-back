@@ -31,3 +31,17 @@ public class CreatePromiseApplicationRequest
     [Range(1, 10)]
     public int RequestedQuantity { get; set; }
 }
+
+public class UpdatePromiseApplicationCorrectionRequest
+{
+    [Required]
+    public Guid PermitId { get; set; }
+
+    [Required]
+    [MaxLength(100)]
+    public string RequestedWeaponType { get; set; } = string.Empty;
+
+    [Required]
+    [Range(1, 10)]
+    public int RequestedQuantity { get; set; }
+}

@@ -479,4 +479,293 @@ public class WpaService : IWpaService
             PageSize = pagination.PageSize
         };
     }
+
+    public async Task<PaginatedResult<WpaPermitApplicationDto>> GetPermitApplicationsAsync(
+        PermitApplicationStatus? status,
+        PaginationParams pagination)
+    {
+        var query = _context.PermitApplications
+            .Include(pa => pa.Citizen)
+            .Include(pa => pa.ReviewedByOfficer)
+            .Include(pa => pa.Attachments)
+            .AsQueryable();
+
+        if (status.HasValue)
+            query = query.Where(pa => pa.Status == status.Value);
+
+        var totalCount = await query.CountAsync();
+
+        var applications = await query
+            .OrderByDescending(pa => pa.CreatedAt)
+            .Skip((pagination.Page - 1) * pagination.PageSize)
+            .Take(pagination.PageSize)
+            .ToListAsync();
+
+        var items = applications.Select(pa => MapToWpaPermitApplicationDto(pa)).ToList();
+
+        return new PaginatedResult<WpaPermitApplicationDto>
+        {
+            Items = items,
+            TotalCount = totalCount,
+            Page = pagination.Page,
+            PageSize = pagination.PageSize
+        };
+    }
+
+    public async Task<WpaPermitApplicationDto?> GetPermitApplicationByIdAsync(Guid applicationId)
+    {
+        var pa = await _context.PermitApplications
+            .Include(p => p.Citizen)
+            .Include(p => p.ReviewedByOfficer)
+            .Include(p => p.Attachments)
+            .FirstOrDefaultAsync(p => p.Id == applicationId);
+
+        if (pa == null)
+            return null;
+
+        await _auditService.LogAsync("WpaViewPermitApplication", "PermitApplication", applicationId.ToString());
+
+        return MapToWpaPermitApplicationDto(pa);
+    }
+
+    public async Task MarkPermitApplicationUnderReviewAsync(Guid officerId, Guid applicationId)
+    {
+        var application = await _context.PermitApplications
+            .FirstOrDefaultAsync(pa => pa.Id == applicationId)
+            ?? throw new NotFoundException("Permit application", applicationId);
+
+        if (application.Status != PermitApplicationStatus.Submitted)
+            throw new BusinessRuleViolationException(
+                $"Cannot mark application as under review (current status: {application.Status})");
+
+        var oldStatus = application.Status;
+        application.Status = PermitApplicationStatus.UnderReview;
+        application.ReviewedByOfficerId = officerId;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaMarkPermitUnderReview", "PermitApplication", applicationId.ToString(),
+            oldValues: new { Status = oldStatus },
+            newValues: new { Status = application.Status });
+    }
+
+    public async Task ApprovePermitApplicationAsync(Guid officerId, Guid applicationId, ApprovePermitApplicationRequest request)
+    {
+        await using var transaction = await _context.Database.BeginTransactionAsync();
+
+        try
+        {
+            var application = await _context.PermitApplications
+                .Include(pa => pa.Citizen)
+                .Include(pa => pa.Attachments)
+                .FirstOrDefaultAsync(pa => pa.Id == applicationId)
+                ?? throw new NotFoundException("Permit application", applicationId);
+
+            if (application.Status != PermitApplicationStatus.UnderReview &&
+                application.Status != PermitApplicationStatus.Submitted)
+                throw new BusinessRuleViolationException(
+                    $"Cannot approve application (current status: {application.Status})");
+
+            var oldStatus = application.Status;
+
+            if (request.MedicalExamExpiryDate == null || request.PsychologicalExamExpiryDate == null)
+                throw new BusinessRuleViolationException("Medical and psychological exam expiry dates are required after document verification");
+
+            if (!application.Attachments.Any(a => a.AttachmentType == PermitApplicationAttachmentType.MedicalCertificate) ||
+                !application.Attachments.Any(a => a.AttachmentType == PermitApplicationAttachmentType.PsychologicalCertificate))
+                throw new BusinessRuleViolationException("Both medical and psychological certificates must be attached before approval");
+
+            var medicalExpiry = request.MedicalExamExpiryDate.Value;
+            var psychExpiry = request.PsychologicalExamExpiryDate.Value;
+
+            var permit = new Permit
+            {
+                Id = Guid.NewGuid(),
+                CitizenId = application.CitizenId,
+                PermitNumber = $"POZW-{DateTime.UtcNow:yyyyMMdd}-{Guid.NewGuid().ToString()[..8].ToUpper()}",
+                PermitType = application.RequestedPermitType,
+                Status = PermitStatus.Active,
+                IssueDate = DateTime.UtcNow,
+                ExpiryDate = DateTime.UtcNow.AddYears(10),
+                MaxFirearms = request.MaxFirearms,
+                UsedSlots = 0,
+                MedicalExamExpiryDateEncrypted = _encryptionService.EncryptDate(medicalExpiry),
+                PsychologicalExamExpiryDateEncrypted = _encryptionService.EncryptDate(psychExpiry),
+                CreatedAt = DateTime.UtcNow
+            };
+
+            _context.Permits.Add(permit);
+
+            application.Status = PermitApplicationStatus.Approved;
+            application.ReviewedByOfficerId = officerId;
+            application.ReviewedAt = DateTime.UtcNow;
+            application.GeneratedPermitId = permit.Id;
+            application.UpdatedAt = DateTime.UtcNow;
+
+            await _context.SaveChangesAsync();
+            await transaction.CommitAsync();
+
+            await _auditService.LogAsync("WpaApprovePermitApplication", "PermitApplication", applicationId.ToString(),
+                oldValues: new { Status = oldStatus },
+                newValues: new { Status = application.Status, PermitId = permit.Id, permit.PermitNumber });
+        }
+        catch
+        {
+            await transaction.RollbackAsync();
+            throw;
+        }
+    }
+
+    public async Task RejectPermitApplicationAsync(Guid officerId, Guid applicationId, string? reason)
+    {
+        var application = await _context.PermitApplications
+            .FirstOrDefaultAsync(pa => pa.Id == applicationId)
+            ?? throw new NotFoundException("Permit application", applicationId);
+
+        if (application.Status == PermitApplicationStatus.Approved ||
+            application.Status == PermitApplicationStatus.Rejected)
+            throw new BusinessRuleViolationException(
+                $"Cannot reject application (current status: {application.Status})");
+
+        var oldStatus = application.Status;
+        application.Status = PermitApplicationStatus.Rejected;
+        application.RejectionReason = reason;
+        application.ReviewedByOfficerId = officerId;
+        application.ReviewedAt = DateTime.UtcNow;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaRejectPermitApplication", "PermitApplication", applicationId.ToString(),
+            oldValues: new { Status = oldStatus },
+            newValues: new { Status = application.Status, reason });
+    }
+
+    public async Task RequirePermitApplicationCorrectionAsync(Guid officerId, Guid applicationId, string? notes)
+    {
+        var application = await _context.PermitApplications
+            .FirstOrDefaultAsync(pa => pa.Id == applicationId)
+            ?? throw new NotFoundException("Permit application", applicationId);
+
+        if (application.Status != PermitApplicationStatus.UnderReview &&
+            application.Status != PermitApplicationStatus.Submitted)
+            throw new BusinessRuleViolationException(
+                $"Cannot require correction for application (current status: {application.Status})");
+
+        var oldStatus = application.Status;
+        application.Status = PermitApplicationStatus.RequiresCorrection;
+        application.CorrectionNotes = notes;
+        application.ReviewedByOfficerId = officerId;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaRequirePermitCorrection", "PermitApplication", applicationId.ToString(),
+            oldValues: new { Status = oldStatus },
+            newValues: new { Status = application.Status, notes });
+    }
+
+    public async Task SuspendPermitAsync(Guid officerId, Guid permitId, string? reason)
+    {
+        var permit = await _context.Permits
+            .FirstOrDefaultAsync(p => p.Id == permitId)
+            ?? throw new NotFoundException("Permit", permitId);
+
+        if (permit.Status != PermitStatus.Active)
+            throw new BusinessRuleViolationException($"Cannot suspend permit (current status: {permit.Status})");
+
+        var oldStatus = permit.Status;
+        permit.Status = PermitStatus.Suspended;
+        permit.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaSuspendPermit", "Permit", permitId.ToString(),
+            oldValues: new { Status = oldStatus },
+            newValues: new { Status = permit.Status, reason });
+    }
+
+    public async Task RevokePermitAsync(Guid officerId, Guid permitId, string? reason)
+    {
+        var permit = await _context.Permits
+            .FirstOrDefaultAsync(p => p.Id == permitId)
+            ?? throw new NotFoundException("Permit", permitId);
+
+        if (permit.Status == PermitStatus.Revoked)
+            throw new BusinessRuleViolationException("Permit is already revoked");
+
+        var oldStatus = permit.Status;
+        permit.Status = PermitStatus.Revoked;
+        permit.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaRevokePermit", "Permit", permitId.ToString(),
+            oldValues: new { Status = oldStatus },
+            newValues: new { Status = permit.Status, reason });
+    }
+
+    public async Task RestorePermitAsync(Guid officerId, Guid permitId, string? reason)
+    {
+        var permit = await _context.Permits
+            .FirstOrDefaultAsync(p => p.Id == permitId)
+            ?? throw new NotFoundException("Permit", permitId);
+
+        if (permit.Status != PermitStatus.Suspended)
+            throw new BusinessRuleViolationException($"Cannot restore permit (current status: {permit.Status})");
+
+        var oldStatus = permit.Status;
+        permit.Status = PermitStatus.Active;
+        permit.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaRestorePermit", "Permit", permitId.ToString(),
+            oldValues: new { Status = oldStatus },
+            newValues: new { Status = permit.Status, reason });
+    }
+
+    public async Task UpdatePermitMedicalExamsAsync(Guid officerId, Guid permitId, UpdatePermitMedicalExamsRequest request)
+    {
+        var permit = await _context.Permits
+            .FirstOrDefaultAsync(p => p.Id == permitId)
+            ?? throw new NotFoundException("Permit", permitId);
+
+        permit.MedicalExamExpiryDateEncrypted = _encryptionService.EncryptDate(request.MedicalExamExpiryDate);
+        permit.PsychologicalExamExpiryDateEncrypted = _encryptionService.EncryptDate(request.PsychologicalExamExpiryDate);
+        permit.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaUpdateMedicalExams", "Permit", permitId.ToString(),
+            newValues: new { request.MedicalExamExpiryDate, request.PsychologicalExamExpiryDate });
+    }
+
+    private WpaPermitApplicationDto MapToWpaPermitApplicationDto(PermitApplication pa) => new()
+    {
+        Id = pa.Id,
+        CitizenId = pa.CitizenId,
+        CitizenName = $"{_encryptionService.Decrypt(pa.Citizen.FirstNameEncrypted)} {_encryptionService.Decrypt(pa.Citizen.LastNameEncrypted)}",
+        CitizenPesel = _encryptionService.Decrypt(pa.Citizen.PeselEncrypted),
+        RequestedPermitType = pa.RequestedPermitType,
+        Reason = pa.Reason,
+        MedicalExamExpiryDate = _encryptionService.DecryptDate(pa.MedicalExamExpiryDateEncrypted),
+        PsychologicalExamExpiryDate = _encryptionService.DecryptDate(pa.PsychologicalExamExpiryDateEncrypted),
+        Status = pa.Status,
+        RejectionReason = pa.RejectionReason,
+        CorrectionNotes = pa.CorrectionNotes,
+        CreatedAt = pa.CreatedAt,
+        ReviewedAt = pa.ReviewedAt,
+        ReviewedByOfficerName = pa.ReviewedByOfficer?.Email,
+        Attachments = pa.Attachments.Select(a => new WpaPermitApplicationAttachmentDto
+        {
+            Id = a.Id,
+            AttachmentType = a.AttachmentType.ToString(),
+            FileName = a.FileName,
+            ContentType = a.ContentType,
+            FileSize = a.FileSize,
+            CreatedAt = a.CreatedAt
+        }).ToList()
+    };
 }

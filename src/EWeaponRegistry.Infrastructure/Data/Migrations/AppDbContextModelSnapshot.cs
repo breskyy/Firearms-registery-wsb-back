@@ -406,6 +406,66 @@ namespace EWeaponRegistry.Infrastructure.Data.Migrations
                     b.ToTable("promises", (string)null);
                 });
 
+            modelBuilder.Entity("EWeaponRegistry.Domain.Entities.PermitApplication", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid");
+
+                    b.Property<Guid>("CitizenId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("CorrectionNotes")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<DateTime>("CreatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("GeneratedPermitId")
+                        .HasColumnType("uuid");
+
+                    b.Property<string>("MedicalExamExpiryDateEncrypted")
+                        .HasColumnType("text");
+
+                    b.Property<string>("PsychologicalExamExpiryDateEncrypted")
+                        .HasColumnType("text");
+
+                    b.Property<string>("Reason")
+                        .IsRequired()
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<string>("RejectionReason")
+                        .HasMaxLength(1000)
+                        .HasColumnType("character varying(1000)");
+
+                    b.Property<int>("RequestedPermitType")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.Property<Guid?>("ReviewedByOfficerId")
+                        .HasColumnType("uuid");
+
+                    b.Property<int>("Status")
+                        .HasColumnType("integer");
+
+                    b.Property<DateTime?>("UpdatedAt")
+                        .HasColumnType("timestamp with time zone");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("CitizenId");
+
+                    b.HasIndex("GeneratedPermitId");
+
+                    b.HasIndex("ReviewedByOfficerId");
+
+                    b.ToTable("permit_applications", (string)null);
+                });
+
             modelBuilder.Entity("EWeaponRegistry.Domain.Entities.PromiseApplication", b =>
                 {
                     b.Property<Guid>("Id")
@@ -677,6 +737,31 @@ namespace EWeaponRegistry.Infrastructure.Data.Migrations
                     b.Navigation("Citizen");
                 });
 
+            modelBuilder.Entity("EWeaponRegistry.Domain.Entities.PermitApplication", b =>
+                {
+                    b.HasOne("EWeaponRegistry.Domain.Entities.CitizenProfile", "Citizen")
+                        .WithMany("PermitApplications")
+                        .HasForeignKey("CitizenId")
+                        .OnDelete(DeleteBehavior.Cascade)
+                        .IsRequired();
+
+                    b.HasOne("EWeaponRegistry.Domain.Entities.Permit", "GeneratedPermit")
+                        .WithMany()
+                        .HasForeignKey("GeneratedPermitId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.HasOne("EWeaponRegistry.Domain.Entities.User", "ReviewedByOfficer")
+                        .WithMany()
+                        .HasForeignKey("ReviewedByOfficerId")
+                        .OnDelete(DeleteBehavior.SetNull);
+
+                    b.Navigation("Citizen");
+
+                    b.Navigation("GeneratedPermit");
+
+                    b.Navigation("ReviewedByOfficer");
+                });
+
             modelBuilder.Entity("EWeaponRegistry.Domain.Entities.Promise", b =>
                 {
                     b.HasOne("EWeaponRegistry.Domain.Entities.CitizenProfile", "Citizen")
@@ -771,6 +856,8 @@ namespace EWeaponRegistry.Infrastructure.Data.Migrations
                     b.Navigation("Firearms");
 
                     b.Navigation("MedicalAlerts");
+
+                    b.Navigation("PermitApplications");
 
                     b.Navigation("Permits");
 

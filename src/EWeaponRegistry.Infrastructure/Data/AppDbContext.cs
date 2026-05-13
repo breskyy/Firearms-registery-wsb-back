@@ -20,6 +20,8 @@ public class AppDbContext : DbContext
     public DbSet<Shop> Shops => Set<Shop>();
     public DbSet<MedicalAlert> MedicalAlerts => Set<MedicalAlert>();
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<PermitApplication> PermitApplications => Set<PermitApplication>();
+    public DbSet<PermitApplicationAttachment> PermitApplicationAttachments => Set<PermitApplicationAttachment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {

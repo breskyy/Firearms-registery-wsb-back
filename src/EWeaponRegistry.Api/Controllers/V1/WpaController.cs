@@ -3,8 +3,10 @@ using EWeaponRegistry.Application.DTOs.Common;
 using EWeaponRegistry.Application.DTOs.Wpa;
 using EWeaponRegistry.Application.Interfaces;
 using EWeaponRegistry.Domain.Enums;
+using EWeaponRegistry.Infrastructure.Data;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.EntityFrameworkCore;
 
 namespace EWeaponRegistry.Api.Controllers.V1;
 
@@ -14,10 +16,12 @@ namespace EWeaponRegistry.Api.Controllers.V1;
 public class WpaController : ControllerBase
 {
     private readonly IWpaService _wpaService;
+    private readonly AppDbContext _context;
 
-    public WpaController(IWpaService wpaService)
+    public WpaController(IWpaService wpaService, AppDbContext context)
     {
         _wpaService = wpaService;
+        _context = context;
     }
 
     /// <summary>
@@ -155,6 +159,163 @@ public class WpaController : ControllerBase
     {
         var result = await _wpaService.GetMedicalAlertsAsync(resolved, pagination);
         return Ok(result);
+    }
+
+    /// <summary>
+    /// Get permit applications (paginated, filterable by status)
+    /// </summary>
+    [HttpGet("permit-applications")]
+    [ProducesResponseType(typeof(PaginatedResult<WpaPermitApplicationDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PaginatedResult<WpaPermitApplicationDto>>> GetPermitApplications(
+        [FromQuery] PermitApplicationStatus? status,
+        [FromQuery] PaginationParams pagination)
+    {
+        var result = await _wpaService.GetPermitApplicationsAsync(status, pagination);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Get permit application details
+    /// </summary>
+    [HttpGet("permit-applications/{id:guid}")]
+    [ProducesResponseType(typeof(WpaPermitApplicationDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WpaPermitApplicationDto>> GetPermitApplicationById(Guid id)
+    {
+        var result = await _wpaService.GetPermitApplicationByIdAsync(id);
+        if (result == null)
+            return NotFound();
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Download a permit application attachment for officer verification
+    /// </summary>
+    [HttpGet("permit-applications/{applicationId:guid}/attachments/{attachmentId:guid}")]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadPermitApplicationAttachment(Guid applicationId, Guid attachmentId)
+    {
+        var attachment = await _context.PermitApplicationAttachments
+            .FirstOrDefaultAsync(a => a.Id == attachmentId && a.PermitApplicationId == applicationId);
+
+        if (attachment == null)
+            return NotFound();
+
+        return File(attachment.Content, attachment.ContentType, attachment.FileName);
+    }
+
+    /// <summary>
+    /// Mark permit application as under review
+    /// </summary>
+    [HttpPost("permit-applications/{id:guid}/mark-under-review")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> MarkPermitApplicationUnderReview(Guid id)
+    {
+        var officerId = GetUserId();
+        await _wpaService.MarkPermitApplicationUnderReviewAsync(officerId, id);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Approve permit application (creates active permit)
+    /// </summary>
+    [HttpPost("permit-applications/{id:guid}/approve")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> ApprovePermitApplication(Guid id, [FromBody] ApprovePermitApplicationRequest request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.ApprovePermitApplicationAsync(officerId, id, request);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Reject permit application
+    /// </summary>
+    [HttpPost("permit-applications/{id:guid}/reject")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RejectPermitApplication(Guid id, [FromBody] ReviewPermitApplicationRequest? request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.RejectPermitApplicationAsync(officerId, id, request?.Reason);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Mark permit application as requiring correction
+    /// </summary>
+    [HttpPost("permit-applications/{id:guid}/require-correction")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RequirePermitApplicationCorrection(Guid id, [FromBody] ReviewPermitApplicationRequest? request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.RequirePermitApplicationCorrectionAsync(officerId, id, request?.Reason);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Suspend a permit
+    /// </summary>
+    [HttpPost("permits/{id:guid}/suspend")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> SuspendPermit(Guid id, [FromBody] ManagePermitRequest? request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.SuspendPermitAsync(officerId, id, request?.Reason);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Revoke a permit
+    /// </summary>
+    [HttpPost("permits/{id:guid}/revoke")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RevokePermit(Guid id, [FromBody] ManagePermitRequest? request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.RevokePermitAsync(officerId, id, request?.Reason);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Restore a suspended permit
+    /// </summary>
+    [HttpPost("permits/{id:guid}/restore")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RestorePermit(Guid id, [FromBody] ManagePermitRequest? request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.RestorePermitAsync(officerId, id, request?.Reason);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Update medical exam dates on a permit (after citizen renews exams)
+    /// </summary>
+    [HttpPatch("permits/{id:guid}/medical-exams")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> UpdatePermitMedicalExams(Guid id, [FromBody] UpdatePermitMedicalExamsRequest request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.UpdatePermitMedicalExamsAsync(officerId, id, request);
+        return NoContent();
     }
 
     private Guid GetUserId()

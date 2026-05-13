@@ -23,4 +23,5 @@ public class CitizenProfile : BaseEntity
     public ICollection<TransferRequest> TransferRequestsAsSeller { get; set; } = new List<TransferRequest>();
     public ICollection<TransferRequest> TransferRequestsAsBuyer { get; set; } = new List<TransferRequest>();
     public ICollection<MedicalAlert> MedicalAlerts { get; set; } = new List<MedicalAlert>();
+    public ICollection<PermitApplication> PermitApplications { get; set; } = new List<PermitApplication>();
 }

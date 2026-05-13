@@ -27,4 +27,19 @@ public interface IWpaService
     Task RequireCorrectionAsync(Guid officerId, Guid applicationId, string? notes);
 
     Task<PaginatedResult<MedicalAlertDto>> GetMedicalAlertsAsync(bool? resolved, PaginationParams pagination);
+
+    Task<PaginatedResult<WpaPermitApplicationDto>> GetPermitApplicationsAsync(
+        PermitApplicationStatus? status,
+        PaginationParams pagination);
+
+    Task<WpaPermitApplicationDto?> GetPermitApplicationByIdAsync(Guid applicationId);
+    Task MarkPermitApplicationUnderReviewAsync(Guid officerId, Guid applicationId);
+    Task ApprovePermitApplicationAsync(Guid officerId, Guid applicationId, ApprovePermitApplicationRequest request);
+    Task RejectPermitApplicationAsync(Guid officerId, Guid applicationId, string? reason);
+    Task RequirePermitApplicationCorrectionAsync(Guid officerId, Guid applicationId, string? notes);
+
+    Task SuspendPermitAsync(Guid officerId, Guid permitId, string? reason);
+    Task RevokePermitAsync(Guid officerId, Guid permitId, string? reason);
+    Task RestorePermitAsync(Guid officerId, Guid permitId, string? reason);
+    Task UpdatePermitMedicalExamsAsync(Guid officerId, Guid permitId, UpdatePermitMedicalExamsRequest request);
 }

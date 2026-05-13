@@ -229,6 +229,67 @@ public class CitizenService : ICitizenService
         };
     }
 
+    public async Task<PromiseApplicationDto> UpdatePromiseApplicationCorrectionAsync(
+        Guid userId,
+        Guid applicationId,
+        UpdatePromiseApplicationCorrectionRequest request)
+    {
+        var citizen = await _context.CitizenProfiles
+            .Include(c => c.Permits)
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        var application = await _context.PromiseApplications
+            .Include(pa => pa.Permit)
+            .FirstOrDefaultAsync(pa => pa.Id == applicationId && pa.CitizenId == citizen.Id)
+            ?? throw new NotFoundException("Promise application", applicationId);
+
+        if (application.Status != PromiseApplicationStatus.RequiresCorrection)
+            throw new BusinessRuleViolationException(
+                $"Cannot submit correction for application (current status: {application.Status})");
+
+        var permit = citizen.Permits.FirstOrDefault(p => p.Id == request.PermitId)
+            ?? throw new NotFoundException("Permit", request.PermitId);
+
+        if (permit.Status != PermitStatus.Active)
+            throw new BusinessRuleViolationException("Permit is not active");
+
+        if (permit.ExpiryDate < DateTime.UtcNow.Date)
+            throw new BusinessRuleViolationException("Permit has expired");
+
+        if (permit.UsedSlots + request.RequestedQuantity > permit.MaxFirearms)
+            throw new BusinessRuleViolationException(
+                $"Requested quantity ({request.RequestedQuantity}) exceeds available slots ({permit.MaxFirearms - permit.UsedSlots})");
+
+        application.PermitId = permit.Id;
+        application.RequestedWeaponType = request.RequestedWeaponType;
+        application.RequestedQuantity = request.RequestedQuantity;
+        application.Status = PromiseApplicationStatus.Submitted;
+        application.CorrectionNotes = null;
+        application.ReviewedByOfficerId = null;
+        application.ReviewedAt = null;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("CorrectPromiseApplication", "PromiseApplication", application.Id.ToString(),
+            newValues: new { request.PermitId, request.RequestedWeaponType, request.RequestedQuantity });
+
+        return new PromiseApplicationDto
+        {
+            Id = application.Id,
+            PermitId = application.PermitId,
+            PermitNumber = permit.PermitNumber,
+            RequestedWeaponType = application.RequestedWeaponType,
+            RequestedQuantity = application.RequestedQuantity,
+            Status = application.Status,
+            RejectionReason = application.RejectionReason,
+            CorrectionNotes = application.CorrectionNotes,
+            CreatedAt = application.CreatedAt,
+            ReviewedAt = application.ReviewedAt
+        };
+    }
+
     public async Task<IList<TransferRequestDto>> GetMyTransferRequestsAsync(Guid userId)
     {
         var citizen = await _context.CitizenProfiles
@@ -276,9 +337,11 @@ public class CitizenService : ICitizenService
             if (firearm.Status != FirearmStatus.Registered)
                 throw new BusinessRuleViolationException("Firearm is not in registered status and cannot be transferred");
 
-            // Find buyer by PESEL
+            // Find buyer by PESEL (with permits eagerly loaded for eligibility check)
             var buyerPeselEncrypted = _encryptionService.Encrypt(request.BuyerPesel);
-            var allCitizens = await _context.CitizenProfiles.ToListAsync();
+            var allCitizens = await _context.CitizenProfiles
+                .Include(c => c.Permits)
+                .ToListAsync();
             var buyer = allCitizens.FirstOrDefault(c =>
                 _encryptionService.Decrypt(c.PeselEncrypted) == request.BuyerPesel);
 
@@ -287,6 +350,29 @@ public class CitizenService : ICitizenService
 
             if (buyer.Id == seller.Id)
                 throw new BusinessRuleViolationException("Cannot transfer firearm to yourself");
+
+            // Pre-validate buyer eligibility (RODO-safe: errors only reveal pass/fail, not buyer's permit details).
+            // This prevents orphan PendingAcceptance transfers that the buyer would never be able to accept.
+            var matchingPermits = buyer.Permits
+                .Where(p => IsPermitValidForCategory(p.PermitType, firearm.Category))
+                .ToList();
+
+            if (matchingPermits.Count == 0)
+                throw new BusinessRuleViolationException("Buyer does not have a permit covering this firearm category");
+
+            var activePermit = matchingPermits.FirstOrDefault(p =>
+                p.Status == PermitStatus.Active && p.ExpiryDate >= DateTime.UtcNow.Date);
+
+            if (activePermit == null)
+                throw new BusinessRuleViolationException("Buyer's matching permit is not active or has expired");
+
+            if (activePermit.UsedSlots >= activePermit.MaxFirearms)
+                throw new BusinessRuleViolationException("Buyer has no free slots on their matching permit");
+
+            var buyerMedicalExpiry = _encryptionService.DecryptDate(activePermit.MedicalExamExpiryDateEncrypted);
+            var buyerPsychExpiry = _encryptionService.DecryptDate(activePermit.PsychologicalExamExpiryDateEncrypted);
+            if (buyerMedicalExpiry < DateTime.UtcNow.Date || buyerPsychExpiry < DateTime.UtcNow.Date)
+                throw new BusinessRuleViolationException("Buyer's medical or psychological exam has expired");
 
             var transferRequest = new TransferRequest
             {
@@ -439,6 +525,202 @@ public class CitizenService : ICitizenService
         await _context.SaveChangesAsync();
 
         await _auditService.LogAsync("RejectTransfer", "TransferRequest", transferRequestId.ToString());
+    }
+
+    public async Task CancelTransferRequestAsync(Guid userId, Guid transferRequestId)
+    {
+        var seller = await _context.CitizenProfiles
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        var transferRequest = await _context.TransferRequests
+            .FirstOrDefaultAsync(tr => tr.Id == transferRequestId)
+            ?? throw new NotFoundException("Transfer request", transferRequestId);
+
+        if (transferRequest.SellerCitizenId != seller.Id)
+            throw new ForbiddenException("Only the seller can cancel a transfer request");
+
+        if (transferRequest.Status != TransferRequestStatus.PendingAcceptance)
+            throw new BusinessRuleViolationException("Only pending transfer requests can be cancelled");
+
+        transferRequest.Status = TransferRequestStatus.Cancelled;
+        transferRequest.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("CancelTransfer", "TransferRequest", transferRequestId.ToString());
+    }
+
+    public async Task<IList<PermitApplicationDto>> GetMyPermitApplicationsAsync(Guid userId)
+    {
+        var citizen = await _context.CitizenProfiles
+            .Include(c => c.PermitApplications)
+            .ThenInclude(pa => pa.Attachments)
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        return citizen.PermitApplications.Select(pa => new PermitApplicationDto
+        {
+            Id = pa.Id,
+            RequestedPermitType = pa.RequestedPermitType,
+            Reason = pa.Reason,
+            MedicalExamExpiryDate = _encryptionService.DecryptDate(pa.MedicalExamExpiryDateEncrypted),
+            PsychologicalExamExpiryDate = _encryptionService.DecryptDate(pa.PsychologicalExamExpiryDateEncrypted),
+            Status = pa.Status,
+            RejectionReason = pa.RejectionReason,
+            CorrectionNotes = pa.CorrectionNotes,
+            CreatedAt = pa.CreatedAt,
+            ReviewedAt = pa.ReviewedAt,
+            Attachments = pa.Attachments.Select(a => new PermitApplicationAttachmentDto
+            {
+                Id = a.Id,
+                AttachmentType = a.AttachmentType.ToString(),
+                FileName = a.FileName,
+                ContentType = a.ContentType,
+                FileSize = a.FileSize,
+                CreatedAt = a.CreatedAt
+            }).ToList()
+        }).ToList();
+    }
+
+    public async Task<PermitApplicationDto> CreatePermitApplicationAsync(Guid userId, CreatePermitApplicationRequest request)
+    {
+        var citizen = await _context.CitizenProfiles
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        var application = new PermitApplication
+        {
+            Id = Guid.NewGuid(),
+            CitizenId = citizen.Id,
+            RequestedPermitType = request.RequestedPermitType,
+            Reason = request.Reason,
+            MedicalExamExpiryDateEncrypted = request.MedicalExamExpiryDate.HasValue
+                ? _encryptionService.EncryptDate(request.MedicalExamExpiryDate.Value)
+                : null,
+            PsychologicalExamExpiryDateEncrypted = request.PsychologicalExamExpiryDate.HasValue
+                ? _encryptionService.EncryptDate(request.PsychologicalExamExpiryDate.Value)
+                : null,
+            Status = PermitApplicationStatus.Submitted,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        _context.PermitApplications.Add(application);
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("CreatePermitApplication", "PermitApplication", application.Id.ToString(),
+            newValues: new { request.RequestedPermitType, request.Reason });
+
+        return new PermitApplicationDto
+        {
+            Id = application.Id,
+            RequestedPermitType = application.RequestedPermitType,
+            Reason = application.Reason,
+            Status = application.Status,
+            CreatedAt = application.CreatedAt
+        };
+    }
+
+    public async Task<PermitApplicationDto> UpdatePermitApplicationCorrectionAsync(
+        Guid userId,
+        Guid applicationId,
+        UpdatePermitApplicationCorrectionRequest request)
+    {
+        var citizen = await _context.CitizenProfiles
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        var application = await _context.PermitApplications
+            .FirstOrDefaultAsync(pa => pa.Id == applicationId && pa.CitizenId == citizen.Id)
+            ?? throw new NotFoundException("Permit application", applicationId);
+
+        if (application.Status != PermitApplicationStatus.RequiresCorrection)
+            throw new BusinessRuleViolationException(
+                $"Cannot submit correction for application (current status: {application.Status})");
+
+        application.RequestedPermitType = request.RequestedPermitType;
+        application.Reason = request.Reason;
+        application.MedicalExamExpiryDateEncrypted = request.MedicalExamExpiryDate.HasValue
+            ? _encryptionService.EncryptDate(request.MedicalExamExpiryDate.Value)
+            : null;
+        application.PsychologicalExamExpiryDateEncrypted = request.PsychologicalExamExpiryDate.HasValue
+            ? _encryptionService.EncryptDate(request.PsychologicalExamExpiryDate.Value)
+            : null;
+        application.Status = PermitApplicationStatus.Submitted;
+        application.CorrectionNotes = null;
+        application.ReviewedByOfficerId = null;
+        application.ReviewedAt = null;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("CorrectPermitApplication", "PermitApplication", application.Id.ToString(),
+            newValues: new { request.RequestedPermitType, request.Reason });
+
+        return new PermitApplicationDto
+        {
+            Id = application.Id,
+            RequestedPermitType = application.RequestedPermitType,
+            Reason = application.Reason,
+            MedicalExamExpiryDate = _encryptionService.DecryptDate(application.MedicalExamExpiryDateEncrypted),
+            PsychologicalExamExpiryDate = _encryptionService.DecryptDate(application.PsychologicalExamExpiryDateEncrypted),
+            Status = application.Status,
+            RejectionReason = application.RejectionReason,
+            CorrectionNotes = application.CorrectionNotes,
+            CreatedAt = application.CreatedAt,
+            ReviewedAt = application.ReviewedAt
+        };
+    }
+
+    public async Task<IList<CitizenMedicalAlertDto>> GetMyMedicalAlertsAsync(Guid userId)
+    {
+        var citizen = await _context.CitizenProfiles
+            .Include(c => c.MedicalAlerts)
+            .ThenInclude(ma => ma.Permit)
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        return citizen.MedicalAlerts.Select(ma => new CitizenMedicalAlertDto
+        {
+            Id = ma.Id,
+            PermitId = ma.PermitId,
+            PermitNumber = ma.Permit?.PermitNumber,
+            AlertType = ma.AlertType,
+            Message = ma.Message,
+            DueDate = ma.DueDate,
+            IsResolved = ma.IsResolved,
+            CreatedAt = ma.CreatedAt
+        }).ToList();
+    }
+
+    public async Task ReportFirearmLostAsync(Guid userId, Guid firearmId, ReportFirearmLostRequest request)
+    {
+        var citizen = await _context.CitizenProfiles
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        var firearm = await _context.Firearms
+            .FirstOrDefaultAsync(f => f.Id == firearmId && f.OwnerCitizenId == citizen.Id)
+            ?? throw new NotFoundException("Firearm", firearmId);
+
+        if (firearm.Status != FirearmStatus.Registered)
+            throw new BusinessRuleViolationException("Only registered firearms can be reported as lost");
+
+        firearm.Status = FirearmStatus.Lost;
+        firearm.UpdatedAt = DateTime.UtcNow;
+
+        // Free up the permit slot
+        var permit = await _context.Permits
+            .Where(p => p.CitizenId == citizen.Id && p.Status == PermitStatus.Active)
+            .FirstOrDefaultAsync();
+        if (permit != null)
+            permit.UsedSlots = Math.Max(0, permit.UsedSlots - 1);
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("ReportFirearmLost", "Firearm", firearmId.ToString(),
+            oldValues: new { Status = FirearmStatus.Registered },
+            newValues: new { Status = FirearmStatus.Lost, request.Description });
     }
 
     private static bool IsPermitValidForCategory(PermitType permitType, FirearmCategory category)
