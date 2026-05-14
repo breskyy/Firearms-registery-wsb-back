@@ -36,7 +36,8 @@ RUN chown -R appuser:appuser /app
 # Switch to non-root user
 USER appuser
 
-# Expose port
+# Bind Kestrel to the port Railway/Docker expects
+ENV ASPNETCORE_URLS=http://+:8080
 EXPOSE 8080
 
 # Health check

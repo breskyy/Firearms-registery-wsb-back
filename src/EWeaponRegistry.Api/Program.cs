@@ -121,11 +121,9 @@ builder.Services.AddCors(options =>
 
 var app = builder.Build();
 
-// Seed database on startup (Development only)
-if (app.Environment.IsDevelopment())
-{
-    await SeedData.InitializeAsync(app.Services);
-}
+// Seed database on startup. SeedData skips if users already exist,
+// so this is safe to run on every startup (including Production/Railway).
+await SeedData.InitializeAsync(app.Services);
 
 // Configure the HTTP request pipeline
 app.UseGlobalExceptionHandler();
