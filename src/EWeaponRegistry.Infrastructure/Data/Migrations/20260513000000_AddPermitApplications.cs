@@ -1,4 +1,6 @@
 using System;
+using EWeaponRegistry.Infrastructure.Data;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
 
 #nullable disable
@@ -6,6 +8,8 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace EWeaponRegistry.Infrastructure.Data.Migrations
 {
     /// <inheritdoc />
+    [DbContext(typeof(AppDbContext))]
+    [Migration("20260513000000_AddPermitApplications")]
     public partial class AddPermitApplications : Migration
     {
         /// <inheritdoc />
