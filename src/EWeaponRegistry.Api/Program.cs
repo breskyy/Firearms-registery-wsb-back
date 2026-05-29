@@ -108,7 +108,7 @@ builder.Services.AddSwaggerGen(options =>
     }
 });
 
-// CORS — Figma Make (*.makeproxy-c.figma.site) and local dev frontends
+// CORS — Figma preview (*.figma.site) and local dev frontends
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
@@ -126,6 +126,7 @@ var app = builder.Build();
 await SeedData.InitializeAsync(app.Services);
 
 // Configure the HTTP request pipeline
+app.UsePrivateNetworkAccess();
 app.UseCors("AllowAll");
 app.UseGlobalExceptionHandler();
 
