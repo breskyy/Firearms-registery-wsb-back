@@ -125,8 +125,8 @@ var app = builder.Build();
 // so this is safe to run on every startup (including Production/Railway).
 await SeedData.InitializeAsync(app.Services);
 
-// Configure the HTTP request pipeline
-app.UsePrivateNetworkAccess();
+// Configure the HTTP request pipeline — Figma Make / PNA must run before routing, CORS, and auth
+app.UseFigmaMakeCors();
 app.UseCors("AllowAll");
 app.UseGlobalExceptionHandler();
 
