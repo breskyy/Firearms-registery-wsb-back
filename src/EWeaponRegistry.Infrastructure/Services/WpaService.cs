@@ -749,6 +749,7 @@ public class WpaService : IWpaService
         CitizenName = $"{_encryptionService.Decrypt(pa.Citizen.FirstNameEncrypted)} {_encryptionService.Decrypt(pa.Citizen.LastNameEncrypted)}",
         CitizenPesel = _encryptionService.Decrypt(pa.Citizen.PeselEncrypted),
         RequestedPermitType = pa.RequestedPermitType,
+        RequestedPermitTypeName = pa.RequestedPermitType.ToString(),
         Reason = pa.Reason,
         MedicalExamExpiryDate = _encryptionService.DecryptDate(pa.MedicalExamExpiryDateEncrypted),
         PsychologicalExamExpiryDate = _encryptionService.DecryptDate(pa.PsychologicalExamExpiryDateEncrypted),
@@ -762,6 +763,7 @@ public class WpaService : IWpaService
         {
             Id = a.Id,
             AttachmentType = a.AttachmentType.ToString(),
+            AttachmentTypeName = a.AttachmentType.ToString(),
             FileName = a.FileName,
             ContentType = a.ContentType,
             FileSize = a.FileSize,

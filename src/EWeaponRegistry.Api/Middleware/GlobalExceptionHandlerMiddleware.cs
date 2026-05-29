@@ -8,15 +8,18 @@ public class GlobalExceptionHandlerMiddleware
     private readonly RequestDelegate _next;
     private readonly ILogger<GlobalExceptionHandlerMiddleware> _logger;
     private readonly IHostEnvironment _env;
+    private readonly IConfiguration _configuration;
 
     public GlobalExceptionHandlerMiddleware(
         RequestDelegate next,
         ILogger<GlobalExceptionHandlerMiddleware> logger,
-        IHostEnvironment env)
+        IHostEnvironment env,
+        IConfiguration configuration)
     {
         _next = next;
         _logger = logger;
         _env = env;
+        _configuration = configuration;
     }
 
     public async Task InvokeAsync(HttpContext context)
@@ -53,6 +56,7 @@ public class GlobalExceptionHandlerMiddleware
 
         context.Response.ContentType = "application/json";
         context.Response.StatusCode = statusCode;
+        CorsOriginHelper.ApplyHeaders(context, _configuration);
 
         var response = new ErrorResponse
         {

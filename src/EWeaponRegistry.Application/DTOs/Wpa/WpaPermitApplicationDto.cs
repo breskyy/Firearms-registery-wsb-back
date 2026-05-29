@@ -10,7 +10,7 @@ public class WpaPermitApplicationDto
     public string CitizenName { get; set; } = string.Empty;
     public string CitizenPesel { get; set; } = string.Empty;
     public PermitType RequestedPermitType { get; set; }
-    public string RequestedPermitTypeName => RequestedPermitType.ToString();
+    public string RequestedPermitTypeName { get; set; } = string.Empty;
     public string Reason { get; set; } = string.Empty;
     public DateTime? MedicalExamExpiryDate { get; set; }
     public DateTime? PsychologicalExamExpiryDate { get; set; }
@@ -28,7 +28,7 @@ public class WpaPermitApplicationAttachmentDto
 {
     public Guid Id { get; set; }
     public string AttachmentType { get; set; } = string.Empty;
-    public string AttachmentTypeName => AttachmentType;
+    public string AttachmentTypeName { get; set; } = string.Empty;
     public string FileName { get; set; } = string.Empty;
     public string ContentType { get; set; } = string.Empty;
     public long FileSize { get; set; }
