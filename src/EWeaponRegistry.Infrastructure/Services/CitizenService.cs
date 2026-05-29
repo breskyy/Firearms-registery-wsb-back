@@ -563,6 +563,7 @@ public class CitizenService : ICitizenService
         {
             Id = pa.Id,
             RequestedPermitType = pa.RequestedPermitType,
+            RequestedPermitTypeName = pa.RequestedPermitType.ToString(),
             Reason = pa.Reason,
             MedicalExamExpiryDate = _encryptionService.DecryptDate(pa.MedicalExamExpiryDateEncrypted),
             PsychologicalExamExpiryDate = _encryptionService.DecryptDate(pa.PsychologicalExamExpiryDateEncrypted),
@@ -575,6 +576,7 @@ public class CitizenService : ICitizenService
             {
                 Id = a.Id,
                 AttachmentType = a.AttachmentType.ToString(),
+                AttachmentTypeName = a.AttachmentType.ToString(),
                 FileName = a.FileName,
                 ContentType = a.ContentType,
                 FileSize = a.FileSize,
@@ -615,9 +617,11 @@ public class CitizenService : ICitizenService
         {
             Id = application.Id,
             RequestedPermitType = application.RequestedPermitType,
+            RequestedPermitTypeName = application.RequestedPermitType.ToString(),
             Reason = application.Reason,
             Status = application.Status,
-            CreatedAt = application.CreatedAt
+            CreatedAt = application.CreatedAt,
+            Attachments = []
         };
     }
 
@@ -661,6 +665,7 @@ public class CitizenService : ICitizenService
         {
             Id = application.Id,
             RequestedPermitType = application.RequestedPermitType,
+            RequestedPermitTypeName = application.RequestedPermitType.ToString(),
             Reason = application.Reason,
             MedicalExamExpiryDate = _encryptionService.DecryptDate(application.MedicalExamExpiryDateEncrypted),
             PsychologicalExamExpiryDate = _encryptionService.DecryptDate(application.PsychologicalExamExpiryDateEncrypted),
@@ -668,7 +673,8 @@ public class CitizenService : ICitizenService
             RejectionReason = application.RejectionReason,
             CorrectionNotes = application.CorrectionNotes,
             CreatedAt = application.CreatedAt,
-            ReviewedAt = application.ReviewedAt
+            ReviewedAt = application.ReviewedAt,
+            Attachments = []
         };
     }
 

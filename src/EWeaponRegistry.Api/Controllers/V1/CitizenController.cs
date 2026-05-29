@@ -268,6 +268,7 @@ public class CitizenController : ControllerBase
         {
             Id = a.Id,
             AttachmentType = a.AttachmentType.ToString(),
+            AttachmentTypeName = a.AttachmentType.ToString(),
             FileName = a.FileName,
             ContentType = a.ContentType,
             FileSize = a.FileSize,
@@ -343,7 +344,8 @@ public class CitizenController : ControllerBase
         if (file.Length > maxFileSize)
             throw new EWeaponRegistry.Application.Exceptions.BusinessRuleViolationException("Attachment file cannot exceed 10 MB");
 
-        if (!allowedContentTypes.Contains(file.ContentType))
+        var contentType = ResolveAttachmentContentType(file);
+        if (!allowedContentTypes.Contains(contentType))
             throw new EWeaponRegistry.Application.Exceptions.BusinessRuleViolationException("Only PDF, JPG and PNG files are allowed");
 
         var existing = application.Attachments.FirstOrDefault(a => a.AttachmentType == type);
@@ -363,12 +365,26 @@ public class CitizenController : ControllerBase
             PermitApplicationId = application.Id,
             AttachmentType = type,
             FileName = Path.GetFileName(file.FileName),
-            ContentType = file.ContentType,
+            ContentType = contentType,
             FileSize = file.Length,
             Content = memory.ToArray(),
             CreatedAt = DateTime.UtcNow
         };
 
         await _context.PermitApplicationAttachments.AddAsync(attachment);
+    }
+
+    private static string ResolveAttachmentContentType(IFormFile file)
+    {
+        if (!string.IsNullOrWhiteSpace(file.ContentType))
+            return file.ContentType;
+
+        return Path.GetExtension(file.FileName).ToLowerInvariant() switch
+        {
+            ".pdf" => "application/pdf",
+            ".jpg" or ".jpeg" => "image/jpeg",
+            ".png" => "image/png",
+            _ => "application/octet-stream",
+        };
     }
 }

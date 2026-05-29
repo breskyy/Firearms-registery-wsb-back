@@ -108,12 +108,12 @@ builder.Services.AddSwaggerGen(options =>
     }
 });
 
-// CORS configuration for frontend integration
+// CORS — Figma Make (*.makeproxy-c.figma.site) and local dev frontends
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("AllowAll", policy =>
     {
-        policy.AllowAnyOrigin()
+        policy.SetIsOriginAllowed(origin => CorsOriginHelper.IsAllowed(origin, builder.Configuration))
               .AllowAnyMethod()
               .AllowAnyHeader();
     });
@@ -126,6 +126,7 @@ var app = builder.Build();
 await SeedData.InitializeAsync(app.Services);
 
 // Configure the HTTP request pipeline
+app.UseCors("AllowAll");
 app.UseGlobalExceptionHandler();
 
 // Swagger UI (Development only in production, but enabled here for demo)
@@ -139,8 +140,6 @@ app.UseSwaggerUI(options =>
 // HTTPS redirection - commented for Docker/local development
 // In production, configure HTTPS/TLS 1.3 at reverse proxy level
 // app.UseHttpsRedirection();
-
-app.UseCors("AllowAll");
 
 app.UseAuthentication();
 app.UseAuthorization();
