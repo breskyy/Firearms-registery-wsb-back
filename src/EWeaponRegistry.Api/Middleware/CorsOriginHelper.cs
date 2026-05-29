@@ -49,11 +49,34 @@ internal static class CorsOriginHelper
         {
             context.Response.Headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS";
         }
+
+        ApplyPrivateNetworkAccessHeader(context);
+    }
+
+    public static void ApplyPrivateNetworkAccessHeader(HttpContext context)
+    {
+        if (context.Response.HasStarted)
+        {
+            return;
+        }
+
+        var requestsPrivateNetwork = context.Request.Headers.ContainsKey("Access-Control-Request-Private-Network");
+        if (!requestsPrivateNetwork && !IsLoopbackHost(context.Request.Host.Host))
+        {
+            return;
+        }
+
+        context.Response.Headers["Access-Control-Allow-Private-Network"] = "true";
     }
 
     private static bool IsFigmaMakeOrigin(string host) =>
-        host.EndsWith(".makeproxy-c.figma.site", StringComparison.OrdinalIgnoreCase)
-        || host.Equals("makeproxy-c.figma.site", StringComparison.OrdinalIgnoreCase);
+        host.EndsWith(".figma.site", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("figma.site", StringComparison.OrdinalIgnoreCase);
+
+    private static bool IsLoopbackHost(string host) =>
+        host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("127.0.0.1", StringComparison.OrdinalIgnoreCase)
+        || host.Equals("[::1]", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsLocalDevelopmentOrigin(string host) =>
         host.Equals("localhost", StringComparison.OrdinalIgnoreCase)
