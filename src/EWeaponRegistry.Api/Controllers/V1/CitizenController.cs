@@ -16,11 +16,16 @@ namespace EWeaponRegistry.Api.Controllers.V1;
 public class CitizenController : ControllerBase
 {
     private readonly ICitizenService _citizenService;
+    private readonly IPermitMedicalExamRenewalService _renewalService;
     private readonly AppDbContext _context;
 
-    public CitizenController(ICitizenService citizenService, AppDbContext context)
+    public CitizenController(
+        ICitizenService citizenService,
+        IPermitMedicalExamRenewalService renewalService,
+        AppDbContext context)
     {
         _citizenService = citizenService;
+        _renewalService = renewalService;
         _context = context;
     }
 
@@ -294,6 +299,60 @@ public class CitizenController : ControllerBase
     }
 
     /// <summary>
+    /// Submit medical exam renewal for an active permit
+    /// </summary>
+    [HttpPost("me/permits/{permitId:guid}/medical-exam-renewals")]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(PermitMedicalExamRenewalDto), StatusCodes.Status201Created)]
+    public async Task<ActionResult<PermitMedicalExamRenewalDto>> SubmitMedicalExamRenewal(
+        Guid permitId,
+        [FromForm] DateTime medicalExamExpiryDate,
+        [FromForm] DateTime psychologicalExamExpiryDate,
+        [FromForm] IFormFile medicalCertificate,
+        [FromForm] IFormFile psychologicalCertificate)
+    {
+        var userId = GetUserId();
+        var request = new SubmitPermitMedicalExamRenewalRequest
+        {
+            MedicalExamExpiryDate = medicalExamExpiryDate,
+            PsychologicalExamExpiryDate = psychologicalExamExpiryDate
+        };
+
+        var result = await _renewalService.SubmitRenewalAsync(
+            userId,
+            permitId,
+            request,
+            await ToCertificateUploadAsync(medicalCertificate),
+            await ToCertificateUploadAsync(psychologicalCertificate));
+
+        return CreatedAtAction(nameof(GetMedicalExamRenewalsForPermit), new { permitId }, result);
+    }
+
+    /// <summary>
+    /// List medical exam renewals for a permit
+    /// </summary>
+    [HttpGet("me/permits/{permitId:guid}/medical-exam-renewals")]
+    [ProducesResponseType(typeof(IList<PermitMedicalExamRenewalDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IList<PermitMedicalExamRenewalDto>>> GetMedicalExamRenewalsForPermit(Guid permitId)
+    {
+        var userId = GetUserId();
+        var result = await _renewalService.GetMyRenewalsForPermitAsync(userId, permitId);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// List all medical exam renewals for current citizen
+    /// </summary>
+    [HttpGet("me/medical-exam-renewals")]
+    [ProducesResponseType(typeof(IList<PermitMedicalExamRenewalDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<IList<PermitMedicalExamRenewalDto>>> GetMyMedicalExamRenewals()
+    {
+        var userId = GetUserId();
+        var result = await _renewalService.GetMyRenewalsAsync(userId);
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Get current citizen's medical alerts
     /// </summary>
     [HttpGet("me/medical-alerts")]
@@ -323,6 +382,28 @@ public class CitizenController : ControllerBase
     {
         var userIdClaim = User.FindFirst("userId") ?? User.FindFirst(ClaimTypes.NameIdentifier);
         return Guid.Parse(userIdClaim!.Value);
+    }
+
+    private static async Task<RenewalCertificateUpload> ToCertificateUploadAsync(IFormFile file)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+
+        var contentType = !string.IsNullOrWhiteSpace(file.ContentType)
+            ? file.ContentType
+            : Path.GetExtension(file.FileName).ToLowerInvariant() switch
+            {
+                ".pdf" => "application/pdf",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".png" => "image/png",
+                _ => "application/octet-stream"
+            };
+
+        return new RenewalCertificateUpload(
+            Path.GetFileName(file.FileName),
+            contentType,
+            memory.ToArray());
     }
 
     private async Task ReplaceAttachmentAsync(

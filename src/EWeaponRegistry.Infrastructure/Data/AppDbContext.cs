@@ -22,6 +22,8 @@ public class AppDbContext : DbContext
     public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
     public DbSet<PermitApplication> PermitApplications => Set<PermitApplication>();
     public DbSet<PermitApplicationAttachment> PermitApplicationAttachments => Set<PermitApplicationAttachment>();
+    public DbSet<PermitMedicalExamRenewal> PermitMedicalExamRenewals => Set<PermitMedicalExamRenewal>();
+    public DbSet<PermitMedicalExamRenewalAttachment> PermitMedicalExamRenewalAttachments => Set<PermitMedicalExamRenewalAttachment>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
