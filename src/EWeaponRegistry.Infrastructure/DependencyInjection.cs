@@ -25,6 +25,7 @@ public static class DependencyInjection
         services.AddScoped<IShopService, ShopService>();
         services.AddScoped<IWpaService, WpaService>();
         services.AddScoped<IAdminService, AdminService>();
+        services.AddScoped<IPermitMedicalExamRenewalService, PermitMedicalExamRenewalService>();
 
         // External Gateways (Mock implementations)
         services.AddSingleton<INationalLoginGateway, MockNationalLoginGateway>();

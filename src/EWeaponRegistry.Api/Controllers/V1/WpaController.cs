@@ -16,11 +16,16 @@ namespace EWeaponRegistry.Api.Controllers.V1;
 public class WpaController : ControllerBase
 {
     private readonly IWpaService _wpaService;
+    private readonly IPermitMedicalExamRenewalService _renewalService;
     private readonly AppDbContext _context;
 
-    public WpaController(IWpaService wpaService, AppDbContext context)
+    public WpaController(
+        IWpaService wpaService,
+        IPermitMedicalExamRenewalService renewalService,
+        AppDbContext context)
     {
         _wpaService = wpaService;
+        _renewalService = renewalService;
         _context = context;
     }
 
@@ -305,7 +310,80 @@ public class WpaController : ControllerBase
     }
 
     /// <summary>
-    /// Update medical exam dates on a permit (after citizen renews exams)
+    /// List medical exam renewal submissions
+    /// </summary>
+    [HttpGet("medical-exam-renewals")]
+    [ProducesResponseType(typeof(PaginatedResult<WpaPermitMedicalExamRenewalDto>), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PaginatedResult<WpaPermitMedicalExamRenewalDto>>> GetMedicalExamRenewals(
+        [FromQuery] PermitMedicalExamRenewalStatus? status,
+        [FromQuery] PaginationParams pagination)
+    {
+        var result = await _renewalService.GetRenewalsForWpaAsync(status, pagination);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Get medical exam renewal details
+    /// </summary>
+    [HttpGet("medical-exam-renewals/{id:guid}")]
+    [ProducesResponseType(typeof(WpaPermitMedicalExamRenewalDto), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<ActionResult<WpaPermitMedicalExamRenewalDto>> GetMedicalExamRenewal(Guid id)
+    {
+        var result = await _renewalService.GetRenewalByIdForWpaAsync(id);
+        return result == null ? NotFound() : Ok(result);
+    }
+
+    /// <summary>
+    /// Download a renewal certificate attachment
+    /// </summary>
+    [HttpGet("medical-exam-renewals/{renewalId:guid}/attachments/{attachmentId:guid}")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadMedicalExamRenewalAttachment(Guid renewalId, Guid attachmentId)
+    {
+        var file = await _renewalService.GetRenewalAttachmentAsync(renewalId, attachmentId, requireOfficer: true);
+        if (file == null)
+            return NotFound();
+
+        return File(file.Value.Content, file.Value.ContentType, file.Value.FileName);
+    }
+
+    /// <summary>
+    /// Mark renewal as under review
+    /// </summary>
+    [HttpPost("medical-exam-renewals/{id:guid}/mark-under-review")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> MarkMedicalExamRenewalUnderReview(Guid id)
+    {
+        await _renewalService.MarkRenewalUnderReviewAsync(GetUserId(), id);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Approve medical exam renewal
+    /// </summary>
+    [HttpPost("medical-exam-renewals/{id:guid}/approve")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> ApproveMedicalExamRenewal(Guid id, [FromBody] ApprovePermitMedicalExamRenewalRequest? request)
+    {
+        await _renewalService.ApproveRenewalAsync(GetUserId(), id, request ?? new ApprovePermitMedicalExamRenewalRequest());
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Reject medical exam renewal
+    /// </summary>
+    [HttpPost("medical-exam-renewals/{id:guid}/reject")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    public async Task<IActionResult> RejectMedicalExamRenewal(Guid id, [FromBody] RejectPermitMedicalExamRenewalRequest request)
+    {
+        await _renewalService.RejectRenewalAsync(GetUserId(), id, request);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Update medical exam dates on a permit (registry override without citizen renewal)
     /// </summary>
     [HttpPatch("permits/{id:guid}/medical-exams")]
     [ProducesResponseType(StatusCodes.Status204NoContent)]

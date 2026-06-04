@@ -115,12 +115,24 @@ public static class SeedData
                 ExpiryDate = DateTime.UtcNow.AddYears(4),
                 MaxFirearms = 5,
                 UsedSlots = 1,
-                MedicalExamExpiryDateEncrypted = encryptionService.EncryptDate(DateTime.UtcNow.AddYears(1)),
-                PsychologicalExamExpiryDateEncrypted = encryptionService.EncryptDate(DateTime.UtcNow.AddYears(1)),
+                MedicalExamExpiryDateEncrypted = encryptionService.EncryptDate(DateTime.UtcNow.AddDays(-14)),
+                PsychologicalExamExpiryDateEncrypted = encryptionService.EncryptDate(DateTime.UtcNow.AddMonths(8)),
                 CreatedAt = DateTime.UtcNow
             };
 
             context.Permits.Add(permit);
+
+            context.MedicalAlerts.Add(new MedicalAlert
+            {
+                Id = Guid.NewGuid(),
+                CitizenId = citizenProfile.Id,
+                PermitId = permit.Id,
+                AlertType = MedicalAlertType.MedicalExamExpired,
+                Message = $"Badanie lekarskie wygasło (pozwolenie {permit.PermitNumber}).",
+                DueDate = DateTime.UtcNow.AddDays(-14),
+                IsResolved = false,
+                CreatedAt = DateTime.UtcNow
+            });
 
             // Create promise
             var promise = new Promise
