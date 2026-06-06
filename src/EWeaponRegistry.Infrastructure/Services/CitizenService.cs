@@ -255,12 +255,17 @@ public class CitizenService : ICitizenService
         application.PermitId = permit.Id;
         application.RequestedWeaponType = request.RequestedWeaponType;
         application.RequestedQuantity = request.RequestedQuantity;
+        var newFee = ApplicationPaymentFees.CalculatePromiseFee(request.RequestedQuantity);
+        var feeChanged = application.FeeAmount != newFee;
         application.Status = PromiseApplicationStatus.Submitted;
-        application.FeeAmount = ApplicationPaymentFees.CalculatePromiseFee(request.RequestedQuantity);
-        application.PaymentStatus = PaymentStatus.Pending;
-        application.PaymentReferenceId = null;
-        application.PaymentMethod = null;
+        application.FeeAmount = newFee;
         application.PaymentRejectionComment = null;
+        if (feeChanged || application.PaymentStatus is not (PaymentStatus.Submitted or PaymentStatus.Paid))
+        {
+            application.PaymentStatus = PaymentStatus.Pending;
+            application.PaymentReferenceId = null;
+            application.PaymentMethod = null;
+        }
         application.CorrectionNotes = null;
         application.ReviewedByOfficerId = null;
         application.ReviewedAt = null;
@@ -605,10 +610,13 @@ public class CitizenService : ICitizenService
             ? _encryptionService.EncryptDate(request.PsychologicalExamExpiryDate.Value)
             : null;
         application.Status = PermitApplicationStatus.Submitted;
-        application.PaymentStatus = PaymentStatus.Pending;
-        application.PaymentReferenceId = null;
-        application.PaymentMethod = null;
         application.PaymentRejectionComment = null;
+        if (application.PaymentStatus is not (PaymentStatus.Submitted or PaymentStatus.Paid))
+        {
+            application.PaymentStatus = PaymentStatus.Pending;
+            application.PaymentReferenceId = null;
+            application.PaymentMethod = null;
+        }
         application.CorrectionNotes = null;
         application.ReviewedByOfficerId = null;
         application.ReviewedAt = null;

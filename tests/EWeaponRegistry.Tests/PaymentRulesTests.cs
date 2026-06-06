@@ -434,6 +434,57 @@ public class PaymentRulesTests : IDisposable
         updated.PaymentRejectionComment.Should().Contain("Kwota wpłaty");
         updated.PaymentMethod.Should().BeNull();
         updated.Attachments.Should().BeEmpty();
+        updated.Status.Should().Be(PermitApplicationStatus.RequiresCorrection);
+        updated.CorrectionNotes.Should().Contain("Kwota wpłaty");
+    }
+
+    [Fact]
+    public async Task RequirePermitCorrection_WithPaymentNotes_ResetsSubmittedPayment()
+    {
+        var officerId = Guid.NewGuid();
+        var (citizen, _) = SeedCitizen();
+        var application = new PermitApplication
+        {
+            Id = Guid.NewGuid(),
+            CitizenId = citizen.Id,
+            RequestedPermitType = PermitType.Sport,
+            Reason = "Test",
+            Status = PermitApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
+            PaymentStatus = PaymentStatus.Submitted,
+            PaymentMethod = PaymentMethod.BankTransfer,
+            CreatedAt = DateTime.UtcNow,
+            Attachments =
+            {
+                new PermitApplicationAttachment
+                {
+                    Id = Guid.NewGuid(),
+                    AttachmentType = PermitApplicationAttachmentType.PaymentProof,
+                    FileName = "proof.pdf",
+                    ContentType = "application/pdf",
+                    FileSize = 3,
+                    Content = new byte[] { 1, 2, 3 },
+                    CreatedAt = DateTime.UtcNow
+                }
+            }
+        };
+        _context.PermitApplications.Add(application);
+        await _context.SaveChangesAsync();
+
+        var wpaService = CreateWpaService();
+        await wpaService.RequirePermitApplicationCorrectionAsync(
+            officerId,
+            application.Id,
+            "Niepoprawny załącznik — prześlij czytelny dowód wpłaty.");
+
+        var updated = await _context.PermitApplications
+            .Include(a => a.Attachments)
+            .FirstAsync(a => a.Id == application.Id);
+
+        updated.Status.Should().Be(PermitApplicationStatus.RequiresCorrection);
+        updated.PaymentStatus.Should().Be(PaymentStatus.Pending);
+        updated.PaymentRejectionComment.Should().Contain("dowód wpłaty");
+        updated.Attachments.Should().BeEmpty();
     }
 
     [Fact]

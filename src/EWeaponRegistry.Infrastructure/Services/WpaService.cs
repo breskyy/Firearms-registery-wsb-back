@@ -389,6 +389,7 @@ public class WpaService : IWpaService
     public async Task RequireCorrectionAsync(Guid officerId, Guid applicationId, string? notes)
     {
         var application = await _context.PromiseApplications
+            .Include(pa => pa.Attachments)
             .FirstOrDefaultAsync(pa => pa.Id == applicationId)
             ?? throw new NotFoundException("Promise application", applicationId);
 
@@ -402,6 +403,8 @@ public class WpaService : IWpaService
         var oldStatus = application.Status;
         application.Status = PromiseApplicationStatus.RequiresCorrection;
         application.CorrectionNotes = notes;
+        if (IsPaymentCorrectionRequested(notes) && application.PaymentStatus == PaymentStatus.Submitted)
+            ResetPromisePaymentForResubmission(application, notes!);
         application.ReviewedByOfficerId = officerId;
         application.UpdatedAt = DateTime.UtcNow;
 
@@ -629,6 +632,7 @@ public class WpaService : IWpaService
     public async Task RequirePermitApplicationCorrectionAsync(Guid officerId, Guid applicationId, string? notes)
     {
         var application = await _context.PermitApplications
+            .Include(pa => pa.Attachments)
             .FirstOrDefaultAsync(pa => pa.Id == applicationId)
             ?? throw new NotFoundException("Permit application", applicationId);
 
@@ -640,6 +644,8 @@ public class WpaService : IWpaService
         var oldStatus = application.Status;
         application.Status = PermitApplicationStatus.RequiresCorrection;
         application.CorrectionNotes = notes;
+        if (IsPaymentCorrectionRequested(notes) && application.PaymentStatus == PaymentStatus.Submitted)
+            ResetPermitPaymentForResubmission(application, notes!);
         application.ReviewedByOfficerId = officerId;
         application.UpdatedAt = DateTime.UtcNow;
 
@@ -785,27 +791,20 @@ public class WpaService : IWpaService
             application.PaymentReferenceId,
             application.Attachments.Any(a => a.AttachmentType == PermitApplicationAttachmentType.PaymentProof));
 
-        var proof = application.Attachments
-            .FirstOrDefault(a => a.AttachmentType == PermitApplicationAttachmentType.PaymentProof);
-        if (proof != null)
-        {
-            application.Attachments.Remove(proof);
-            _context.PermitApplicationAttachments.Remove(proof);
-        }
-
         var oldPaymentStatus = application.PaymentStatus;
-        application.PaymentStatus = PaymentStatus.Pending;
-        application.PaymentRejectionComment = comment.Trim();
-        application.PaymentReferenceId = null;
-        application.PaymentMethod = null;
+        var oldStatus = application.Status;
+        var trimmedComment = comment.Trim();
+        ResetPermitPaymentForResubmission(application, trimmedComment);
+        application.Status = PermitApplicationStatus.RequiresCorrection;
+        application.CorrectionNotes = trimmedComment;
         application.ReviewedByOfficerId = officerId;
         application.UpdatedAt = DateTime.UtcNow;
 
         await _context.SaveChangesAsync();
 
         await _auditService.LogAsync("WpaRejectPaymentProof", "PermitApplication", applicationId.ToString(),
-            oldValues: new { PaymentStatus = oldPaymentStatus },
-            newValues: new { PaymentStatus = application.PaymentStatus, Comment = comment });
+            oldValues: new { PaymentStatus = oldPaymentStatus, Status = oldStatus },
+            newValues: new { PaymentStatus = application.PaymentStatus, Status = application.Status, Comment = comment });
     }
 
     public async Task RejectPromiseApplicationPaymentProofAsync(Guid officerId, Guid applicationId, string comment)
@@ -821,6 +820,61 @@ public class WpaService : IWpaService
             application.PaymentReferenceId,
             application.Attachments.Any(a => a.AttachmentType == PromiseApplicationAttachmentType.PaymentProof));
 
+        var oldPaymentStatus = application.PaymentStatus;
+        var oldStatus = application.Status;
+        var trimmedComment = comment.Trim();
+        ResetPromisePaymentForResubmission(application, trimmedComment);
+        application.Status = PromiseApplicationStatus.RequiresCorrection;
+        application.CorrectionNotes = trimmedComment;
+        application.ReviewedByOfficerId = officerId;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaRejectPaymentProof", "PromiseApplication", applicationId.ToString(),
+            oldValues: new { PaymentStatus = oldPaymentStatus, Status = oldStatus },
+            newValues: new { PaymentStatus = application.PaymentStatus, Status = application.Status, Comment = comment });
+    }
+
+    private static bool IsPaymentCorrectionRequested(string? notes)
+    {
+        if (string.IsNullOrWhiteSpace(notes))
+            return false;
+
+        var normalized = notes.ToLowerInvariant();
+        return normalized.Contains("dowód")
+            || normalized.Contains("dowod")
+            || normalized.Contains("wpłat")
+            || normalized.Contains("wplat")
+            || normalized.Contains("opłat")
+            || normalized.Contains("oplat")
+            || normalized.Contains("płatno")
+            || normalized.Contains("platno")
+            || normalized.Contains("payment")
+            || normalized.Contains("przelew")
+            || normalized.Contains("eplatno")
+            || normalized.Contains("e-płatno")
+            || normalized.Contains("e-platno");
+    }
+
+    private void ResetPermitPaymentForResubmission(PermitApplication application, string comment)
+    {
+        var proof = application.Attachments
+            .FirstOrDefault(a => a.AttachmentType == PermitApplicationAttachmentType.PaymentProof);
+        if (proof != null)
+        {
+            application.Attachments.Remove(proof);
+            _context.PermitApplicationAttachments.Remove(proof);
+        }
+
+        application.PaymentStatus = PaymentStatus.Pending;
+        application.PaymentRejectionComment = comment.Trim();
+        application.PaymentReferenceId = null;
+        application.PaymentMethod = null;
+    }
+
+    private void ResetPromisePaymentForResubmission(PromiseApplication application, string comment)
+    {
         var proof = application.Attachments
             .FirstOrDefault(a => a.AttachmentType == PromiseApplicationAttachmentType.PaymentProof);
         if (proof != null)
@@ -829,19 +883,10 @@ public class WpaService : IWpaService
             _context.PromiseApplicationAttachments.Remove(proof);
         }
 
-        var oldPaymentStatus = application.PaymentStatus;
         application.PaymentStatus = PaymentStatus.Pending;
         application.PaymentRejectionComment = comment.Trim();
         application.PaymentReferenceId = null;
         application.PaymentMethod = null;
-        application.ReviewedByOfficerId = officerId;
-        application.UpdatedAt = DateTime.UtcNow;
-
-        await _context.SaveChangesAsync();
-
-        await _auditService.LogAsync("WpaRejectPaymentProof", "PromiseApplication", applicationId.ToString(),
-            oldValues: new { PaymentStatus = oldPaymentStatus },
-            newValues: new { PaymentStatus = application.PaymentStatus, Comment = comment });
     }
 
     private static void RejectPaymentProofCore(
