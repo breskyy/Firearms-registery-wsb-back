@@ -19,6 +19,9 @@ public class PromiseApplicationDto
     public decimal FeeAmount { get; set; }
     public PaymentStatus PaymentStatus { get; set; }
     public string PaymentStatusName => PaymentStatus.ToString();
+    public PaymentMethod? PaymentMethod { get; set; }
+    public string? PaymentMethodName => PaymentMethod?.ToString();
+    public string? PaymentRejectionComment { get; set; }
     public IList<PromiseApplicationAttachmentDto> Attachments { get; set; } = new List<PromiseApplicationAttachmentDto>();
 }
 

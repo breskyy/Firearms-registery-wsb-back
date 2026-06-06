@@ -259,6 +259,8 @@ public class CitizenService : ICitizenService
         application.FeeAmount = ApplicationPaymentFees.CalculatePromiseFee(request.RequestedQuantity);
         application.PaymentStatus = PaymentStatus.Pending;
         application.PaymentReferenceId = null;
+        application.PaymentMethod = null;
+        application.PaymentRejectionComment = null;
         application.CorrectionNotes = null;
         application.ReviewedByOfficerId = null;
         application.ReviewedAt = null;
@@ -605,6 +607,8 @@ public class CitizenService : ICitizenService
         application.Status = PermitApplicationStatus.Submitted;
         application.PaymentStatus = PaymentStatus.Pending;
         application.PaymentReferenceId = null;
+        application.PaymentMethod = null;
+        application.PaymentRejectionComment = null;
         application.CorrectionNotes = null;
         application.ReviewedByOfficerId = null;
         application.ReviewedAt = null;
@@ -632,6 +636,8 @@ public class CitizenService : ICitizenService
             throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment initiation failed");
 
         application.PaymentReferenceId = result.PaymentId;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
         application.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
@@ -657,6 +663,9 @@ public class CitizenService : ICitizenService
     {
         var application = await GetOwnedPermitApplicationAsync(userId, applicationId, includeAttachments: true);
         EnsurePaymentProofCanBeSubmitted(application.PaymentStatus);
+        ValidatePaymentProofContentType(contentType);
+        if (content.Length > 10 * 1024 * 1024)
+            throw new BusinessRuleViolationException("Payment proof file cannot exceed 10 MB");
 
         var attachment = await ReplacePermitAttachmentAsync(
             application,
@@ -666,6 +675,9 @@ public class CitizenService : ICitizenService
             content);
 
         application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.BankTransfer;
+        application.PaymentReferenceId = null;
+        application.PaymentRejectionComment = null;
         application.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
@@ -689,6 +701,8 @@ public class CitizenService : ICitizenService
             throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment initiation failed");
 
         application.PaymentReferenceId = result.PaymentId;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
         application.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
@@ -714,6 +728,9 @@ public class CitizenService : ICitizenService
     {
         var application = await GetOwnedPromiseApplicationAsync(userId, applicationId, includeAttachments: true);
         EnsurePaymentProofCanBeSubmitted(application.PaymentStatus);
+        ValidatePaymentProofContentType(contentType);
+        if (content.Length > 10 * 1024 * 1024)
+            throw new BusinessRuleViolationException("Payment proof file cannot exceed 10 MB");
 
         var attachment = await ReplacePromiseAttachmentAsync(
             application,
@@ -723,6 +740,9 @@ public class CitizenService : ICitizenService
             content);
 
         application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.BankTransfer;
+        application.PaymentReferenceId = null;
+        application.PaymentRejectionComment = null;
         application.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
@@ -823,6 +843,19 @@ public class CitizenService : ICitizenService
             throw new BusinessRuleViolationException($"Payment proof cannot be submitted (current status: {paymentStatus})");
     }
 
+    private static void ValidatePaymentProofContentType(string contentType)
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "application/pdf",
+            "image/jpeg",
+            "image/png"
+        };
+
+        if (!allowed.Contains(contentType))
+            throw new BusinessRuleViolationException("Only PDF, JPG and PNG files are allowed for payment proof");
+    }
+
     private async Task ConfirmApplicationPaymentAsync(
         PermitApplication application,
         string paymentId,
@@ -840,6 +873,8 @@ public class CitizenService : ICitizenService
             throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment confirmation failed");
 
         application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
         application.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
@@ -864,6 +899,8 @@ public class CitizenService : ICitizenService
             throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment confirmation failed");
 
         application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
         application.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
 
@@ -946,6 +983,8 @@ public class CitizenService : ICitizenService
         ReviewedAt = pa.ReviewedAt,
         FeeAmount = pa.FeeAmount,
         PaymentStatus = pa.PaymentStatus,
+        PaymentMethod = pa.PaymentMethod,
+        PaymentRejectionComment = pa.PaymentRejectionComment,
         Attachments = pa.Attachments.Select(MapPermitAttachmentDto).ToList()
     };
 
@@ -977,6 +1016,8 @@ public class CitizenService : ICitizenService
         ReviewedAt = pa.ReviewedAt,
         FeeAmount = pa.FeeAmount,
         PaymentStatus = pa.PaymentStatus,
+        PaymentMethod = pa.PaymentMethod,
+        PaymentRejectionComment = pa.PaymentRejectionComment,
         Attachments = pa.Attachments.Select(MapPromiseAttachmentDto).ToList()
     };
 
@@ -996,8 +1037,11 @@ public class CitizenService : ICitizenService
         ApplicationId = application.Id,
         FeeAmount = application.FeeAmount,
         PaymentStatus = application.PaymentStatus,
+        PaymentMethod = application.PaymentMethod,
         PaymentReferenceId = application.PaymentReferenceId,
-        PaymentUrl = paymentUrl
+        PaymentUrl = paymentUrl,
+        PaymentRejectionComment = application.PaymentRejectionComment,
+        BankTransferDetails = BuildBankTransferDetails(application.Id, application.FeeAmount, "permit")
     };
 
     private static ApplicationPaymentDto MapApplicationPaymentDto(PromiseApplication application, string? paymentUrl = null) => new()
@@ -1005,8 +1049,20 @@ public class CitizenService : ICitizenService
         ApplicationId = application.Id,
         FeeAmount = application.FeeAmount,
         PaymentStatus = application.PaymentStatus,
+        PaymentMethod = application.PaymentMethod,
         PaymentReferenceId = application.PaymentReferenceId,
-        PaymentUrl = paymentUrl
+        PaymentUrl = paymentUrl,
+        PaymentRejectionComment = application.PaymentRejectionComment,
+        BankTransferDetails = BuildBankTransferDetails(application.Id, application.FeeAmount, "promise")
+    };
+
+    private static BankTransferDetailsDto BuildBankTransferDetails(Guid applicationId, decimal amount, string kind) => new()
+    {
+        AccountNumber = ApplicationPaymentBankDetails.AccountNumber,
+        AccountHolder = ApplicationPaymentBankDetails.AccountHolder,
+        BankName = ApplicationPaymentBankDetails.BankName,
+        TransferTitle = ApplicationPaymentBankDetails.BuildTransferTitle(applicationId, kind),
+        Amount = amount
     };
 
     private static bool IsPermitValidForCategory(PermitType permitType, FirearmCategory category)

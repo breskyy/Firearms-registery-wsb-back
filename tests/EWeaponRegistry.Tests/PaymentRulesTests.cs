@@ -169,6 +169,8 @@ public class PaymentRulesTests : IDisposable
             Status = PermitApplicationStatus.Submitted,
             FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
             PaymentStatus = PaymentStatus.Submitted,
+            PaymentMethod = PaymentMethod.OnlineMock,
+            PaymentReferenceId = "PAY-ONLINE-1",
             CreatedAt = DateTime.UtcNow
         };
         _context.PermitApplications.Add(application);
@@ -195,6 +197,8 @@ public class PaymentRulesTests : IDisposable
             Status = PermitApplicationStatus.Submitted,
             FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
             PaymentStatus = PaymentStatus.Submitted,
+            PaymentMethod = PaymentMethod.OnlineMock,
+            PaymentReferenceId = "PAY-ONLINE-1",
             CreatedAt = DateTime.UtcNow
         };
         _context.PermitApplications.Add(application);
@@ -237,6 +241,8 @@ public class PaymentRulesTests : IDisposable
             Status = PromiseApplicationStatus.Submitted,
             FeeAmount = 17m,
             PaymentStatus = PaymentStatus.Submitted,
+            PaymentMethod = PaymentMethod.OnlineMock,
+            PaymentReferenceId = "PAY-PROMISE-1",
             CreatedAt = DateTime.UtcNow
         };
         _context.Permits.Add(permit);
@@ -290,5 +296,174 @@ public class PaymentRulesTests : IDisposable
             wpaService.ApproveApplicationAsync(officerId, application.Id));
 
         ex.Message.Should().Contain("payment");
+    }
+
+    [Fact]
+    public async Task UploadPermitPaymentProof_SetsBankTransferMethodAndSubmittedStatus()
+    {
+        var (citizen, userId) = SeedCitizen();
+        var application = new PermitApplication
+        {
+            Id = Guid.NewGuid(),
+            CitizenId = citizen.Id,
+            RequestedPermitType = PermitType.Sport,
+            Reason = "Test",
+            Status = PermitApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
+            PaymentStatus = PaymentStatus.Pending,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.PermitApplications.Add(application);
+        await _context.SaveChangesAsync();
+
+        var service = CreateCitizenService();
+        await service.UploadPermitApplicationPaymentProofAsync(
+            userId,
+            application.Id,
+            "proof.pdf",
+            "application/pdf",
+            new byte[] { 1, 2, 3 });
+
+        var updated = await _context.PermitApplications
+            .Include(a => a.Attachments)
+            .FirstAsync(a => a.Id == application.Id);
+
+        updated.PaymentStatus.Should().Be(PaymentStatus.Submitted);
+        updated.PaymentMethod.Should().Be(PaymentMethod.BankTransfer);
+        updated.Attachments.Should().ContainSingle(a => a.AttachmentType == PermitApplicationAttachmentType.PaymentProof);
+    }
+
+    [Fact]
+    public async Task UploadPermitPaymentProof_WithInvalidMime_ThrowsBusinessRuleViolation()
+    {
+        var (citizen, userId) = SeedCitizen();
+        var application = new PermitApplication
+        {
+            Id = Guid.NewGuid(),
+            CitizenId = citizen.Id,
+            RequestedPermitType = PermitType.Sport,
+            Reason = "Test",
+            Status = PermitApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
+            PaymentStatus = PaymentStatus.Pending,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.PermitApplications.Add(application);
+        await _context.SaveChangesAsync();
+
+        var service = CreateCitizenService();
+        var ex = await Assert.ThrowsAsync<BusinessRuleViolationException>(() =>
+            service.UploadPermitApplicationPaymentProofAsync(
+                userId,
+                application.Id,
+                "proof.exe",
+                "application/octet-stream",
+                new byte[] { 1 }));
+
+        ex.Message.Should().Contain("PDF");
+    }
+
+    [Fact]
+    public async Task VerifyPermitPayment_WithoutProofForBankTransfer_ThrowsBusinessRuleViolation()
+    {
+        var officerId = Guid.NewGuid();
+        var (citizen, _) = SeedCitizen();
+        var application = new PermitApplication
+        {
+            Id = Guid.NewGuid(),
+            CitizenId = citizen.Id,
+            RequestedPermitType = PermitType.Sport,
+            Reason = "Test",
+            Status = PermitApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
+            PaymentStatus = PaymentStatus.Submitted,
+            PaymentMethod = PaymentMethod.BankTransfer,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.PermitApplications.Add(application);
+        await _context.SaveChangesAsync();
+
+        var wpaService = CreateWpaService();
+        var ex = await Assert.ThrowsAsync<BusinessRuleViolationException>(() =>
+            wpaService.VerifyPermitApplicationPaymentAsync(officerId, application.Id));
+
+        ex.Message.Should().Contain("proof");
+    }
+
+    [Fact]
+    public async Task RejectPermitPaymentProof_ReturnsToPendingWithComment()
+    {
+        var officerId = Guid.NewGuid();
+        var (citizen, _) = SeedCitizen();
+        var application = new PermitApplication
+        {
+            Id = Guid.NewGuid(),
+            CitizenId = citizen.Id,
+            RequestedPermitType = PermitType.Sport,
+            Reason = "Test",
+            Status = PermitApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
+            PaymentStatus = PaymentStatus.Submitted,
+            PaymentMethod = PaymentMethod.BankTransfer,
+            CreatedAt = DateTime.UtcNow,
+            Attachments =
+            {
+                new PermitApplicationAttachment
+                {
+                    Id = Guid.NewGuid(),
+                    AttachmentType = PermitApplicationAttachmentType.PaymentProof,
+                    FileName = "proof.pdf",
+                    ContentType = "application/pdf",
+                    FileSize = 3,
+                    Content = new byte[] { 1, 2, 3 },
+                    CreatedAt = DateTime.UtcNow
+                }
+            }
+        };
+        _context.PermitApplications.Add(application);
+        await _context.SaveChangesAsync();
+
+        var wpaService = CreateWpaService();
+        await wpaService.RejectPermitApplicationPaymentProofAsync(officerId, application.Id, "Kwota wpłaty nie zgadza się z wymaganą opłatą skarbową.");
+
+        var updated = await _context.PermitApplications
+            .Include(a => a.Attachments)
+            .FirstAsync(a => a.Id == application.Id);
+
+        updated.PaymentStatus.Should().Be(PaymentStatus.Pending);
+        updated.PaymentRejectionComment.Should().Contain("Kwota wpłaty");
+        updated.PaymentMethod.Should().BeNull();
+        updated.Attachments.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task ConfirmPermitPayment_SetsOnlineMockMethod()
+    {
+        var (citizen, userId) = SeedCitizen();
+        var application = new PermitApplication
+        {
+            Id = Guid.NewGuid(),
+            CitizenId = citizen.Id,
+            RequestedPermitType = PermitType.Sport,
+            Reason = "Test",
+            Status = PermitApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
+            PaymentStatus = PaymentStatus.Pending,
+            PaymentReferenceId = "PAY-TEST-002",
+            PaymentMethod = PaymentMethod.OnlineMock,
+            CreatedAt = DateTime.UtcNow
+        };
+        _context.PermitApplications.Add(application);
+        await _context.SaveChangesAsync();
+
+        _paymentGatewayMock
+            .Setup(g => g.ConfirmPaymentAsync("PAY-TEST-002"))
+            .ReturnsAsync(new PaymentConfirmResult { Success = true, IsPaid = true, TransactionId = "TXN-2" });
+
+        var service = CreateCitizenService();
+        var result = await service.ConfirmPermitApplicationPaymentAsync(userId, application.Id, "PAY-TEST-002");
+
+        result.PaymentStatus.Should().Be(PaymentStatus.Submitted);
+        result.PaymentMethod.Should().Be(PaymentMethod.OnlineMock);
     }
 }

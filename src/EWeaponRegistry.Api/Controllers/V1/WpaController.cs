@@ -168,6 +168,39 @@ public class WpaController : ControllerBase
     }
 
     /// <summary>
+    /// Reject promise application payment proof and request resubmission
+    /// </summary>
+    [HttpPost("promise-applications/{id:guid}/reject-payment-proof")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RejectPromiseApplicationPaymentProof(
+        Guid id,
+        [FromBody] RejectPaymentProofRequest request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.RejectPromiseApplicationPaymentProofAsync(officerId, id, request.Comment);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Download a promise application attachment for officer verification
+    /// </summary>
+    [HttpGet("promise-applications/{applicationId:guid}/attachments/{attachmentId:guid}")]
+    [ProducesResponseType(typeof(FileContentResult), StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    public async Task<IActionResult> DownloadPromiseApplicationAttachment(Guid applicationId, Guid attachmentId)
+    {
+        var attachment = await _context.PromiseApplicationAttachments
+            .FirstOrDefaultAsync(a => a.Id == attachmentId && a.PromiseApplicationId == applicationId);
+
+        if (attachment == null)
+            return NotFound();
+
+        return File(attachment.Content, attachment.ContentType, attachment.FileName);
+    }
+
+    /// <summary>
     /// Get medical alerts
     /// </summary>
     [HttpGet("medical-alerts")]
@@ -292,6 +325,22 @@ public class WpaController : ControllerBase
     {
         var officerId = GetUserId();
         await _wpaService.VerifyPermitApplicationPaymentAsync(officerId, id);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Reject permit application payment proof and request resubmission
+    /// </summary>
+    [HttpPost("permit-applications/{id:guid}/reject-payment-proof")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> RejectPermitApplicationPaymentProof(
+        Guid id,
+        [FromBody] RejectPaymentProofRequest request)
+    {
+        var officerId = GetUserId();
+        await _wpaService.RejectPermitApplicationPaymentProofAsync(officerId, id, request.Comment);
         return NoContent();
     }
 

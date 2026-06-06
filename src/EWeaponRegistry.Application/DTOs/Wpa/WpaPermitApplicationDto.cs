@@ -24,6 +24,9 @@ public class WpaPermitApplicationDto
     public decimal FeeAmount { get; set; }
     public PaymentStatus PaymentStatus { get; set; }
     public string PaymentStatusName => PaymentStatus.ToString();
+    public PaymentMethod? PaymentMethod { get; set; }
+    public string? PaymentMethodName => PaymentMethod?.ToString();
+    public string? PaymentReferenceId { get; set; }
     public IList<WpaPermitApplicationAttachmentDto> Attachments { get; set; } = new List<WpaPermitApplicationAttachmentDto>();
 }
 
