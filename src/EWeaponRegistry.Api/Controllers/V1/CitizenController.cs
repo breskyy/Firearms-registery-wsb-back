@@ -136,6 +136,55 @@ public class CitizenController : ControllerBase
     }
 
     /// <summary>
+    /// Initiate mock payment for promise application fee (17 PLN per certificate)
+    /// </summary>
+    [HttpPost("me/promise-applications/{id:guid}/payment/initiate")]
+    [ProducesResponseType(typeof(ApplicationPaymentDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApplicationPaymentDto>> InitiatePromiseApplicationPayment(Guid id)
+    {
+        var userId = GetUserId();
+        var result = await _citizenService.InitiatePromiseApplicationPaymentAsync(userId, id);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Confirm mock payment for promise application
+    /// </summary>
+    [HttpPost("me/promise-applications/{id:guid}/payment/confirm")]
+    [ProducesResponseType(typeof(ApplicationPaymentDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApplicationPaymentDto>> ConfirmPromiseApplicationPayment(
+        Guid id,
+        [FromBody] ConfirmApplicationPaymentRequest request)
+    {
+        var userId = GetUserId();
+        var result = await _citizenService.ConfirmPromiseApplicationPaymentAsync(userId, id, request.PaymentId);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Upload payment proof for promise application
+    /// </summary>
+    [HttpPost("me/promise-applications/{id:guid}/payment-proof")]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(PromiseApplicationAttachmentDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PromiseApplicationAttachmentDto>> UploadPromiseApplicationPaymentProof(
+        Guid id,
+        [FromForm] IFormFile paymentProof)
+    {
+        if (paymentProof == null || paymentProof.Length == 0)
+            return BadRequest(new { message = "Payment proof file is required" });
+
+        var userId = GetUserId();
+        var result = await _citizenService.UploadPromiseApplicationPaymentProofAsync(
+            userId,
+            id,
+            Path.GetFileName(paymentProof.FileName),
+            ResolveAttachmentContentType(paymentProof),
+            await ReadAttachmentBytesAsync(paymentProof));
+        return Ok(result);
+    }
+
+    /// <summary>
     /// Get current citizen's transfer requests
     /// </summary>
     [HttpGet("me/transfer-requests")]
@@ -241,7 +290,8 @@ public class CitizenController : ControllerBase
     public async Task<ActionResult<IList<PermitApplicationAttachmentDto>>> UploadPermitApplicationAttachments(
         Guid id,
         [FromForm] IFormFile? medicalCertificate,
-        [FromForm] IFormFile? psychologicalCertificate)
+        [FromForm] IFormFile? psychologicalCertificate,
+        [FromForm] IFormFile? paymentProof)
     {
         var userId = GetUserId();
         var citizen = await _context.CitizenProfiles.FirstOrDefaultAsync(c => c.UserId == userId)
@@ -255,11 +305,23 @@ public class CitizenController : ControllerBase
         if (application.Status is PermitApplicationStatus.Approved or PermitApplicationStatus.Rejected)
             return Conflict(new { message = $"Cannot upload attachments for application in status {application.Status}" });
 
-        if (medicalCertificate == null && psychologicalCertificate == null)
-            return BadRequest(new { message = "At least one certificate file is required" });
+        if (medicalCertificate == null && psychologicalCertificate == null && paymentProof == null)
+            return BadRequest(new { message = "At least one attachment file is required" });
 
         await ReplaceAttachmentAsync(application, medicalCertificate, PermitApplicationAttachmentType.MedicalCertificate);
         await ReplaceAttachmentAsync(application, psychologicalCertificate, PermitApplicationAttachmentType.PsychologicalCertificate);
+        if (paymentProof != null && paymentProof.Length > 0)
+        {
+            await _citizenService.UploadPermitApplicationPaymentProofAsync(
+                userId,
+                id,
+                Path.GetFileName(paymentProof.FileName),
+                ResolveAttachmentContentType(paymentProof),
+                await ReadAttachmentBytesAsync(paymentProof));
+            application = await _context.PermitApplications
+                .Include(pa => pa.Attachments)
+                .FirstAsync(pa => pa.Id == id);
+        }
 
         application.UpdatedAt = DateTime.UtcNow;
         await _context.SaveChangesAsync();
@@ -279,6 +341,55 @@ public class CitizenController : ControllerBase
             FileSize = a.FileSize,
             CreatedAt = a.CreatedAt
         }).ToList());
+    }
+
+    /// <summary>
+    /// Initiate mock payment for permit application fee (242 PLN)
+    /// </summary>
+    [HttpPost("me/permit-applications/{id:guid}/payment/initiate")]
+    [ProducesResponseType(typeof(ApplicationPaymentDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApplicationPaymentDto>> InitiatePermitApplicationPayment(Guid id)
+    {
+        var userId = GetUserId();
+        var result = await _citizenService.InitiatePermitApplicationPaymentAsync(userId, id);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Confirm mock payment for permit application
+    /// </summary>
+    [HttpPost("me/permit-applications/{id:guid}/payment/confirm")]
+    [ProducesResponseType(typeof(ApplicationPaymentDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<ApplicationPaymentDto>> ConfirmPermitApplicationPayment(
+        Guid id,
+        [FromBody] ConfirmApplicationPaymentRequest request)
+    {
+        var userId = GetUserId();
+        var result = await _citizenService.ConfirmPermitApplicationPaymentAsync(userId, id, request.PaymentId);
+        return Ok(result);
+    }
+
+    /// <summary>
+    /// Upload payment proof for permit application
+    /// </summary>
+    [HttpPost("me/permit-applications/{id:guid}/payment-proof")]
+    [Consumes("multipart/form-data")]
+    [ProducesResponseType(typeof(PermitApplicationAttachmentDto), StatusCodes.Status200OK)]
+    public async Task<ActionResult<PermitApplicationAttachmentDto>> UploadPermitApplicationPaymentProof(
+        Guid id,
+        [FromForm] IFormFile paymentProof)
+    {
+        if (paymentProof == null || paymentProof.Length == 0)
+            return BadRequest(new { message = "Payment proof file is required" });
+
+        var userId = GetUserId();
+        var result = await _citizenService.UploadPermitApplicationPaymentProofAsync(
+            userId,
+            id,
+            Path.GetFileName(paymentProof.FileName),
+            ResolveAttachmentContentType(paymentProof),
+            await ReadAttachmentBytesAsync(paymentProof));
+        return Ok(result);
     }
 
     /// <summary>
@@ -453,6 +564,14 @@ public class CitizenController : ControllerBase
         };
 
         await _context.PermitApplicationAttachments.AddAsync(attachment);
+    }
+
+    private static async Task<byte[]> ReadAttachmentBytesAsync(IFormFile file)
+    {
+        await using var stream = file.OpenReadStream();
+        using var memory = new MemoryStream();
+        await stream.CopyToAsync(memory);
+        return memory.ToArray();
     }
 
     private static string ResolveAttachmentContentType(IFormFile file)

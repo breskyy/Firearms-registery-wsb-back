@@ -16,6 +16,9 @@ public class PermitApplication : BaseEntity
     public Guid? ReviewedByOfficerId { get; set; }
     public DateTime? ReviewedAt { get; set; }
     public Guid? GeneratedPermitId { get; set; }
+    public decimal FeeAmount { get; set; }
+    public PaymentStatus PaymentStatus { get; set; }
+    public string? PaymentReferenceId { get; set; }
 
     public CitizenProfile Citizen { get; set; } = null!;
     public User? ReviewedByOfficer { get; set; }

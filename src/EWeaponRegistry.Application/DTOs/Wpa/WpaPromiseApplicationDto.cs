@@ -21,6 +21,21 @@ public class WpaPromiseApplicationDto
     public DateTime CreatedAt { get; set; }
     public DateTime? ReviewedAt { get; set; }
     public string? ReviewedByOfficerName { get; set; }
+    public decimal FeeAmount { get; set; }
+    public PaymentStatus PaymentStatus { get; set; }
+    public string PaymentStatusName => PaymentStatus.ToString();
+    public IList<WpaPromiseApplicationAttachmentDto> Attachments { get; set; } = new List<WpaPromiseApplicationAttachmentDto>();
+}
+
+public class WpaPromiseApplicationAttachmentDto
+{
+    public Guid Id { get; set; }
+    public string AttachmentType { get; set; } = string.Empty;
+    public string AttachmentTypeName { get; set; } = string.Empty;
+    public string FileName { get; set; } = string.Empty;
+    public string ContentType { get; set; } = string.Empty;
+    public long FileSize { get; set; }
+    public DateTime CreatedAt { get; set; }
 }
 
 public class ReviewPromiseApplicationRequest

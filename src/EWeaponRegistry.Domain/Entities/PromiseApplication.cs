@@ -20,10 +20,14 @@ public class PromiseApplication : BaseEntity
 
     // Generated promise (after approval)
     public Guid? GeneratedPromiseId { get; set; }
+    public decimal FeeAmount { get; set; }
+    public PaymentStatus PaymentStatus { get; set; }
+    public string? PaymentReferenceId { get; set; }
 
     // Navigation properties
     public CitizenProfile Citizen { get; set; } = null!;
     public Permit Permit { get; set; } = null!;
     public User? ReviewedByOfficer { get; set; }
     public Promise? GeneratedPromise { get; set; }
+    public ICollection<PromiseApplicationAttachment> Attachments { get; set; } = new List<PromiseApplicationAttachment>();
 }

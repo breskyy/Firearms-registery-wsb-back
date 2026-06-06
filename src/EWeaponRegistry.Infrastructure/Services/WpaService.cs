@@ -214,6 +214,7 @@ public class WpaService : IWpaService
             .Include(pa => pa.Citizen)
             .Include(pa => pa.Permit)
             .Include(pa => pa.ReviewedByOfficer)
+            .Include(pa => pa.Attachments)
             .AsQueryable();
 
         if (status.HasValue)
@@ -229,24 +230,7 @@ public class WpaService : IWpaService
             .Take(pagination.PageSize)
             .ToListAsync();
 
-        var items = applications.Select(pa => new WpaPromiseApplicationDto
-        {
-            Id = pa.Id,
-            CitizenId = pa.CitizenId,
-            CitizenName = $"{_encryptionService.Decrypt(pa.Citizen.FirstNameEncrypted)} {_encryptionService.Decrypt(pa.Citizen.LastNameEncrypted)}",
-            CitizenPesel = _encryptionService.Decrypt(pa.Citizen.PeselEncrypted),
-            PermitId = pa.PermitId,
-            PermitNumber = pa.Permit.PermitNumber,
-            PermitType = pa.Permit.PermitType.ToString(),
-            RequestedWeaponType = pa.RequestedWeaponType,
-            RequestedQuantity = pa.RequestedQuantity,
-            Status = pa.Status,
-            RejectionReason = pa.RejectionReason,
-            CorrectionNotes = pa.CorrectionNotes,
-            CreatedAt = pa.CreatedAt,
-            ReviewedAt = pa.ReviewedAt,
-            ReviewedByOfficerName = pa.ReviewedByOfficer?.Email
-        }).ToList();
+        var items = applications.Select(MapToWpaPromiseApplicationDto).ToList();
 
         return new PaginatedResult<WpaPromiseApplicationDto>
         {
@@ -263,6 +247,7 @@ public class WpaService : IWpaService
             .Include(p => p.Citizen)
             .Include(p => p.Permit)
             .Include(p => p.ReviewedByOfficer)
+            .Include(p => p.Attachments)
             .FirstOrDefaultAsync(p => p.Id == applicationId);
 
         if (pa == null)
@@ -270,24 +255,7 @@ public class WpaService : IWpaService
 
         await _auditService.LogAsync("WpaViewPromiseApplication", "PromiseApplication", applicationId.ToString());
 
-        return new WpaPromiseApplicationDto
-        {
-            Id = pa.Id,
-            CitizenId = pa.CitizenId,
-            CitizenName = $"{_encryptionService.Decrypt(pa.Citizen.FirstNameEncrypted)} {_encryptionService.Decrypt(pa.Citizen.LastNameEncrypted)}",
-            CitizenPesel = _encryptionService.Decrypt(pa.Citizen.PeselEncrypted),
-            PermitId = pa.PermitId,
-            PermitNumber = pa.Permit.PermitNumber,
-            PermitType = pa.Permit.PermitType.ToString(),
-            RequestedWeaponType = pa.RequestedWeaponType,
-            RequestedQuantity = pa.RequestedQuantity,
-            Status = pa.Status,
-            RejectionReason = pa.RejectionReason,
-            CorrectionNotes = pa.CorrectionNotes,
-            CreatedAt = pa.CreatedAt,
-            ReviewedAt = pa.ReviewedAt,
-            ReviewedByOfficerName = pa.ReviewedByOfficer?.Email
-        };
+        return MapToWpaPromiseApplicationDto(pa);
     }
 
     public async Task MarkApplicationUnderReviewAsync(Guid officerId, Guid applicationId)
@@ -302,6 +270,10 @@ public class WpaService : IWpaService
             throw new BusinessRuleViolationException(
                 $"Cannot mark application as under review (current status: {application.Status})");
         }
+
+        if (application.PaymentStatus != PaymentStatus.Paid)
+            throw new BusinessRuleViolationException(
+                $"Cannot mark application as under review until payment is verified (current payment status: {application.PaymentStatus})");
 
         var oldStatus = application.Status;
         application.Status = PromiseApplicationStatus.UnderReview;
@@ -334,6 +306,10 @@ public class WpaService : IWpaService
                     $"Cannot approve application (current status: {application.Status})");
             }
 
+            if (application.PaymentStatus != PaymentStatus.Paid)
+                throw new BusinessRuleViolationException(
+                    $"Cannot approve application until payment is verified (current payment status: {application.PaymentStatus})");
+
             var oldStatus = application.Status;
 
             // Create promise
@@ -347,7 +323,7 @@ public class WpaService : IWpaService
                 Quantity = application.RequestedQuantity,
                 UsedQuantity = 0,
                 Status = PromiseStatus.Active,
-                FeeAmount = 17.00m, // Standard fee
+                FeeAmount = application.FeeAmount,
                 PaymentStatus = PaymentStatus.Paid,
                 IssueDate = DateTime.UtcNow,
                 ExpiryDate = DateTime.UtcNow.AddMonths(3),
@@ -538,6 +514,10 @@ public class WpaService : IWpaService
             throw new BusinessRuleViolationException(
                 $"Cannot mark application as under review (current status: {application.Status})");
 
+        if (application.PaymentStatus != PaymentStatus.Paid)
+            throw new BusinessRuleViolationException(
+                $"Cannot mark application as under review until payment is verified (current payment status: {application.PaymentStatus})");
+
         var oldStatus = application.Status;
         application.Status = PermitApplicationStatus.UnderReview;
         application.ReviewedByOfficerId = officerId;
@@ -566,6 +546,10 @@ public class WpaService : IWpaService
                 application.Status != PermitApplicationStatus.Submitted)
                 throw new BusinessRuleViolationException(
                     $"Cannot approve application (current status: {application.Status})");
+
+            if (application.PaymentStatus != PaymentStatus.Paid)
+                throw new BusinessRuleViolationException(
+                    $"Cannot approve application until payment is verified (current payment status: {application.PaymentStatus})");
 
             var oldStatus = application.Status;
 
@@ -742,6 +726,83 @@ public class WpaService : IWpaService
             newValues: new { request.MedicalExamExpiryDate, request.PsychologicalExamExpiryDate });
     }
 
+    public async Task VerifyPermitApplicationPaymentAsync(Guid officerId, Guid applicationId)
+    {
+        var application = await _context.PermitApplications
+            .FirstOrDefaultAsync(pa => pa.Id == applicationId)
+            ?? throw new NotFoundException("Permit application", applicationId);
+
+        if (application.PaymentStatus != PaymentStatus.Submitted)
+            throw new BusinessRuleViolationException(
+                $"Cannot verify payment (current payment status: {application.PaymentStatus})");
+
+        var oldPaymentStatus = application.PaymentStatus;
+        application.PaymentStatus = PaymentStatus.Paid;
+        application.ReviewedByOfficerId = officerId;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaVerifyPermitPayment", "PermitApplication", applicationId.ToString(),
+            oldValues: new { PaymentStatus = oldPaymentStatus },
+            newValues: new { PaymentStatus = application.PaymentStatus });
+    }
+
+    public async Task VerifyPromiseApplicationPaymentAsync(Guid officerId, Guid applicationId)
+    {
+        var application = await _context.PromiseApplications
+            .FirstOrDefaultAsync(pa => pa.Id == applicationId)
+            ?? throw new NotFoundException("Promise application", applicationId);
+
+        if (application.PaymentStatus != PaymentStatus.Submitted)
+            throw new BusinessRuleViolationException(
+                $"Cannot verify payment (current payment status: {application.PaymentStatus})");
+
+        var oldPaymentStatus = application.PaymentStatus;
+        var oldStatus = application.Status;
+        application.PaymentStatus = PaymentStatus.Paid;
+        application.Status = PromiseApplicationStatus.Paid;
+        application.ReviewedByOfficerId = officerId;
+        application.UpdatedAt = DateTime.UtcNow;
+
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("WpaVerifyPromisePayment", "PromiseApplication", applicationId.ToString(),
+            oldValues: new { PaymentStatus = oldPaymentStatus, Status = oldStatus },
+            newValues: new { PaymentStatus = application.PaymentStatus, Status = application.Status });
+    }
+
+    private WpaPromiseApplicationDto MapToWpaPromiseApplicationDto(PromiseApplication pa) => new()
+    {
+        Id = pa.Id,
+        CitizenId = pa.CitizenId,
+        CitizenName = $"{_encryptionService.Decrypt(pa.Citizen.FirstNameEncrypted)} {_encryptionService.Decrypt(pa.Citizen.LastNameEncrypted)}",
+        CitizenPesel = _encryptionService.Decrypt(pa.Citizen.PeselEncrypted),
+        PermitId = pa.PermitId,
+        PermitNumber = pa.Permit.PermitNumber,
+        PermitType = pa.Permit.PermitType.ToString(),
+        RequestedWeaponType = pa.RequestedWeaponType,
+        RequestedQuantity = pa.RequestedQuantity,
+        Status = pa.Status,
+        RejectionReason = pa.RejectionReason,
+        CorrectionNotes = pa.CorrectionNotes,
+        CreatedAt = pa.CreatedAt,
+        ReviewedAt = pa.ReviewedAt,
+        ReviewedByOfficerName = pa.ReviewedByOfficer?.Email,
+        FeeAmount = pa.FeeAmount,
+        PaymentStatus = pa.PaymentStatus,
+        Attachments = pa.Attachments.Select(a => new WpaPromiseApplicationAttachmentDto
+        {
+            Id = a.Id,
+            AttachmentType = a.AttachmentType.ToString(),
+            AttachmentTypeName = a.AttachmentType.ToString(),
+            FileName = a.FileName,
+            ContentType = a.ContentType,
+            FileSize = a.FileSize,
+            CreatedAt = a.CreatedAt
+        }).ToList()
+    };
+
     private WpaPermitApplicationDto MapToWpaPermitApplicationDto(PermitApplication pa) => new()
     {
         Id = pa.Id,
@@ -759,6 +820,8 @@ public class WpaService : IWpaService
         CreatedAt = pa.CreatedAt,
         ReviewedAt = pa.ReviewedAt,
         ReviewedByOfficerName = pa.ReviewedByOfficer?.Email,
+        FeeAmount = pa.FeeAmount,
+        PaymentStatus = pa.PaymentStatus,
         Attachments = pa.Attachments.Select(a => new WpaPermitApplicationAttachmentDto
         {
             Id = a.Id,

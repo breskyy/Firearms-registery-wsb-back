@@ -22,5 +22,11 @@ public interface ICitizenService
     Task<IList<PermitApplicationDto>> GetMyPermitApplicationsAsync(Guid userId);
     Task<PermitApplicationDto> CreatePermitApplicationAsync(Guid userId, CreatePermitApplicationRequest request);
     Task<PermitApplicationDto> UpdatePermitApplicationCorrectionAsync(Guid userId, Guid applicationId, UpdatePermitApplicationCorrectionRequest request);
+    Task<ApplicationPaymentDto> InitiatePermitApplicationPaymentAsync(Guid userId, Guid applicationId);
+    Task<ApplicationPaymentDto> ConfirmPermitApplicationPaymentAsync(Guid userId, Guid applicationId, string paymentId);
+    Task<PermitApplicationAttachmentDto> UploadPermitApplicationPaymentProofAsync(Guid userId, Guid applicationId, string fileName, string contentType, byte[] content);
+    Task<ApplicationPaymentDto> InitiatePromiseApplicationPaymentAsync(Guid userId, Guid applicationId);
+    Task<ApplicationPaymentDto> ConfirmPromiseApplicationPaymentAsync(Guid userId, Guid applicationId, string paymentId);
+    Task<PromiseApplicationAttachmentDto> UploadPromiseApplicationPaymentProofAsync(Guid userId, Guid applicationId, string fileName, string contentType, byte[] content);
     Task<IList<CitizenMedicalAlertDto>> GetMyMedicalAlertsAsync(Guid userId);
 }

@@ -16,6 +16,10 @@ public class PromiseApplicationDto
     public string? CorrectionNotes { get; set; }
     public DateTime CreatedAt { get; set; }
     public DateTime? ReviewedAt { get; set; }
+    public decimal FeeAmount { get; set; }
+    public PaymentStatus PaymentStatus { get; set; }
+    public string PaymentStatusName => PaymentStatus.ToString();
+    public IList<PromiseApplicationAttachmentDto> Attachments { get; set; } = new List<PromiseApplicationAttachmentDto>();
 }
 
 public class CreatePromiseApplicationRequest

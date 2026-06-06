@@ -154,6 +154,20 @@ public class WpaController : ControllerBase
     }
 
     /// <summary>
+    /// Verify promise application payment after citizen submitted proof or mock payment
+    /// </summary>
+    [HttpPost("promise-applications/{id:guid}/verify-payment")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> VerifyPromiseApplicationPayment(Guid id)
+    {
+        var officerId = GetUserId();
+        await _wpaService.VerifyPromiseApplicationPaymentAsync(officerId, id);
+        return NoContent();
+    }
+
+    /// <summary>
     /// Get medical alerts
     /// </summary>
     [HttpGet("medical-alerts")]
@@ -264,6 +278,20 @@ public class WpaController : ControllerBase
     {
         var officerId = GetUserId();
         await _wpaService.RequirePermitApplicationCorrectionAsync(officerId, id, request?.Reason);
+        return NoContent();
+    }
+
+    /// <summary>
+    /// Verify permit application payment after citizen submitted proof or mock payment
+    /// </summary>
+    [HttpPost("permit-applications/{id:guid}/verify-payment")]
+    [ProducesResponseType(StatusCodes.Status204NoContent)]
+    [ProducesResponseType(StatusCodes.Status404NotFound)]
+    [ProducesResponseType(StatusCodes.Status409Conflict)]
+    public async Task<IActionResult> VerifyPermitApplicationPayment(Guid id)
+    {
+        var officerId = GetUserId();
+        await _wpaService.VerifyPermitApplicationPaymentAsync(officerId, id);
         return NoContent();
     }
 
