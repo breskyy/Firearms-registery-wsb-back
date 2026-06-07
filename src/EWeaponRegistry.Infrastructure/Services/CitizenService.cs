@@ -1,6 +1,8 @@
 using EWeaponRegistry.Application.DTOs.Citizen;
 using EWeaponRegistry.Application.Exceptions;
 using EWeaponRegistry.Application.Interfaces;
+using EWeaponRegistry.Application.Interfaces.ExternalGateways;
+using EWeaponRegistry.Domain.Constants;
 using EWeaponRegistry.Domain.Entities;
 using EWeaponRegistry.Domain.Enums;
 using EWeaponRegistry.Infrastructure.Data;
@@ -13,12 +15,18 @@ public class CitizenService : ICitizenService
     private readonly AppDbContext _context;
     private readonly IEncryptionService _encryptionService;
     private readonly IAuditService _auditService;
+    private readonly IPaymentGateway _paymentGateway;
 
-    public CitizenService(AppDbContext context, IEncryptionService encryptionService, IAuditService auditService)
+    public CitizenService(
+        AppDbContext context,
+        IEncryptionService encryptionService,
+        IAuditService auditService,
+        IPaymentGateway paymentGateway)
     {
         _context = context;
         _encryptionService = encryptionService;
         _auditService = auditService;
+        _paymentGateway = paymentGateway;
     }
 
     public async Task<CitizenProfileDto> GetMyProfileAsync(Guid userId)
@@ -160,22 +168,12 @@ public class CitizenService : ICitizenService
         var citizen = await _context.CitizenProfiles
             .Include(c => c.PromiseApplications)
             .ThenInclude(pa => pa.Permit)
+            .Include(c => c.PromiseApplications)
+            .ThenInclude(pa => pa.Attachments)
             .FirstOrDefaultAsync(c => c.UserId == userId)
             ?? throw new NotFoundException("Citizen profile not found");
 
-        return citizen.PromiseApplications.Select(pa => new PromiseApplicationDto
-        {
-            Id = pa.Id,
-            PermitId = pa.PermitId,
-            PermitNumber = pa.Permit.PermitNumber,
-            RequestedWeaponType = pa.RequestedWeaponType,
-            RequestedQuantity = pa.RequestedQuantity,
-            Status = pa.Status,
-            RejectionReason = pa.RejectionReason,
-            CorrectionNotes = pa.CorrectionNotes,
-            CreatedAt = pa.CreatedAt,
-            ReviewedAt = pa.ReviewedAt
-        }).ToList();
+        return citizen.PromiseApplications.Select(MapPromiseApplicationDto).ToList();
     }
 
     public async Task<PromiseApplicationDto> CreatePromiseApplicationAsync(Guid userId, CreatePromiseApplicationRequest request)
@@ -208,6 +206,8 @@ public class CitizenService : ICitizenService
             RequestedWeaponType = request.RequestedWeaponType,
             RequestedQuantity = request.RequestedQuantity,
             Status = PromiseApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.CalculatePromiseFee(request.RequestedQuantity),
+            PaymentStatus = PaymentStatus.Pending,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -217,16 +217,7 @@ public class CitizenService : ICitizenService
         await _auditService.LogAsync("CreatePromiseApplication", "PromiseApplication", application.Id.ToString(),
             newValues: new { request.PermitId, request.RequestedWeaponType, request.RequestedQuantity });
 
-        return new PromiseApplicationDto
-        {
-            Id = application.Id,
-            PermitId = application.PermitId,
-            PermitNumber = permit.PermitNumber,
-            RequestedWeaponType = application.RequestedWeaponType,
-            RequestedQuantity = application.RequestedQuantity,
-            Status = application.Status,
-            CreatedAt = application.CreatedAt
-        };
+        return MapPromiseApplicationDto(application, permit.PermitNumber);
     }
 
     public async Task<PromiseApplicationDto> UpdatePromiseApplicationCorrectionAsync(
@@ -264,7 +255,17 @@ public class CitizenService : ICitizenService
         application.PermitId = permit.Id;
         application.RequestedWeaponType = request.RequestedWeaponType;
         application.RequestedQuantity = request.RequestedQuantity;
+        var newFee = ApplicationPaymentFees.CalculatePromiseFee(request.RequestedQuantity);
+        var feeChanged = application.FeeAmount != newFee;
         application.Status = PromiseApplicationStatus.Submitted;
+        application.FeeAmount = newFee;
+        application.PaymentRejectionComment = null;
+        if (feeChanged || application.PaymentStatus is not (PaymentStatus.Submitted or PaymentStatus.Paid))
+        {
+            application.PaymentStatus = PaymentStatus.Pending;
+            application.PaymentReferenceId = null;
+            application.PaymentMethod = null;
+        }
         application.CorrectionNotes = null;
         application.ReviewedByOfficerId = null;
         application.ReviewedAt = null;
@@ -275,19 +276,7 @@ public class CitizenService : ICitizenService
         await _auditService.LogAsync("CorrectPromiseApplication", "PromiseApplication", application.Id.ToString(),
             newValues: new { request.PermitId, request.RequestedWeaponType, request.RequestedQuantity });
 
-        return new PromiseApplicationDto
-        {
-            Id = application.Id,
-            PermitId = application.PermitId,
-            PermitNumber = permit.PermitNumber,
-            RequestedWeaponType = application.RequestedWeaponType,
-            RequestedQuantity = application.RequestedQuantity,
-            Status = application.Status,
-            RejectionReason = application.RejectionReason,
-            CorrectionNotes = application.CorrectionNotes,
-            CreatedAt = application.CreatedAt,
-            ReviewedAt = application.ReviewedAt
-        };
+        return MapPromiseApplicationDto(application, permit.PermitNumber);
     }
 
     public async Task<IList<TransferRequestDto>> GetMyTransferRequestsAsync(Guid userId)
@@ -559,30 +548,7 @@ public class CitizenService : ICitizenService
             .FirstOrDefaultAsync(c => c.UserId == userId)
             ?? throw new NotFoundException("Citizen profile not found");
 
-        return citizen.PermitApplications.Select(pa => new PermitApplicationDto
-        {
-            Id = pa.Id,
-            RequestedPermitType = pa.RequestedPermitType,
-            RequestedPermitTypeName = pa.RequestedPermitType.ToString(),
-            Reason = pa.Reason,
-            MedicalExamExpiryDate = _encryptionService.DecryptDate(pa.MedicalExamExpiryDateEncrypted),
-            PsychologicalExamExpiryDate = _encryptionService.DecryptDate(pa.PsychologicalExamExpiryDateEncrypted),
-            Status = pa.Status,
-            RejectionReason = pa.RejectionReason,
-            CorrectionNotes = pa.CorrectionNotes,
-            CreatedAt = pa.CreatedAt,
-            ReviewedAt = pa.ReviewedAt,
-            Attachments = pa.Attachments.Select(a => new PermitApplicationAttachmentDto
-            {
-                Id = a.Id,
-                AttachmentType = a.AttachmentType.ToString(),
-                AttachmentTypeName = a.AttachmentType.ToString(),
-                FileName = a.FileName,
-                ContentType = a.ContentType,
-                FileSize = a.FileSize,
-                CreatedAt = a.CreatedAt
-            }).ToList()
-        }).ToList();
+        return citizen.PermitApplications.Select(MapPermitApplicationDto).ToList();
     }
 
     public async Task<PermitApplicationDto> CreatePermitApplicationAsync(Guid userId, CreatePermitApplicationRequest request)
@@ -604,6 +570,8 @@ public class CitizenService : ICitizenService
                 ? _encryptionService.EncryptDate(request.PsychologicalExamExpiryDate.Value)
                 : null,
             Status = PermitApplicationStatus.Submitted,
+            FeeAmount = ApplicationPaymentFees.PermitApplicationFee,
+            PaymentStatus = PaymentStatus.Pending,
             CreatedAt = DateTime.UtcNow
         };
 
@@ -613,16 +581,7 @@ public class CitizenService : ICitizenService
         await _auditService.LogAsync("CreatePermitApplication", "PermitApplication", application.Id.ToString(),
             newValues: new { request.RequestedPermitType, request.Reason });
 
-        return new PermitApplicationDto
-        {
-            Id = application.Id,
-            RequestedPermitType = application.RequestedPermitType,
-            RequestedPermitTypeName = application.RequestedPermitType.ToString(),
-            Reason = application.Reason,
-            Status = application.Status,
-            CreatedAt = application.CreatedAt,
-            Attachments = []
-        };
+        return MapPermitApplicationDto(application);
     }
 
     public async Task<PermitApplicationDto> UpdatePermitApplicationCorrectionAsync(
@@ -651,6 +610,13 @@ public class CitizenService : ICitizenService
             ? _encryptionService.EncryptDate(request.PsychologicalExamExpiryDate.Value)
             : null;
         application.Status = PermitApplicationStatus.Submitted;
+        application.PaymentRejectionComment = null;
+        if (application.PaymentStatus is not (PaymentStatus.Submitted or PaymentStatus.Paid))
+        {
+            application.PaymentStatus = PaymentStatus.Pending;
+            application.PaymentReferenceId = null;
+            application.PaymentMethod = null;
+        }
         application.CorrectionNotes = null;
         application.ReviewedByOfficerId = null;
         application.ReviewedAt = null;
@@ -661,21 +627,137 @@ public class CitizenService : ICitizenService
         await _auditService.LogAsync("CorrectPermitApplication", "PermitApplication", application.Id.ToString(),
             newValues: new { request.RequestedPermitType, request.Reason });
 
-        return new PermitApplicationDto
-        {
-            Id = application.Id,
-            RequestedPermitType = application.RequestedPermitType,
-            RequestedPermitTypeName = application.RequestedPermitType.ToString(),
-            Reason = application.Reason,
-            MedicalExamExpiryDate = _encryptionService.DecryptDate(application.MedicalExamExpiryDateEncrypted),
-            PsychologicalExamExpiryDate = _encryptionService.DecryptDate(application.PsychologicalExamExpiryDateEncrypted),
-            Status = application.Status,
-            RejectionReason = application.RejectionReason,
-            CorrectionNotes = application.CorrectionNotes,
-            CreatedAt = application.CreatedAt,
-            ReviewedAt = application.ReviewedAt,
-            Attachments = []
-        };
+        return MapPermitApplicationDto(application);
+    }
+
+    public async Task<ApplicationPaymentDto> InitiatePermitApplicationPaymentAsync(Guid userId, Guid applicationId)
+    {
+        var application = await GetOwnedPermitApplicationAsync(userId, applicationId, includeAttachments: false);
+        EnsurePaymentCanBeInitiated(application.PaymentStatus);
+
+        var result = await _paymentGateway.InitiatePaymentAsync(
+            application.FeeAmount,
+            $"Opłata skarbowa — wniosek o pozwolenie {application.Id}",
+            application.Id.ToString());
+
+        if (!result.Success || string.IsNullOrEmpty(result.PaymentId))
+            throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment initiation failed");
+
+        application.PaymentReferenceId = result.PaymentId;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
+        application.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("InitiatePermitPayment", "PermitApplication", applicationId.ToString(),
+            newValues: new { result.PaymentId, application.FeeAmount });
+
+        return MapApplicationPaymentDto(application, result.PaymentUrl);
+    }
+
+    public async Task<ApplicationPaymentDto> ConfirmPermitApplicationPaymentAsync(Guid userId, Guid applicationId, string paymentId)
+    {
+        var application = await GetOwnedPermitApplicationAsync(userId, applicationId, includeAttachments: false);
+        await ConfirmApplicationPaymentAsync(application, paymentId, "PermitApplication", "ConfirmPermitPayment");
+        return MapApplicationPaymentDto(application);
+    }
+
+    public async Task<PermitApplicationAttachmentDto> UploadPermitApplicationPaymentProofAsync(
+        Guid userId,
+        Guid applicationId,
+        string fileName,
+        string contentType,
+        byte[] content)
+    {
+        var application = await GetOwnedPermitApplicationAsync(userId, applicationId, includeAttachments: true);
+        EnsurePaymentProofCanBeSubmitted(application.PaymentStatus);
+        ValidatePaymentProofContentType(contentType);
+        if (content.Length > 10 * 1024 * 1024)
+            throw new BusinessRuleViolationException("Payment proof file cannot exceed 10 MB");
+
+        var attachment = await ReplacePermitAttachmentAsync(
+            application,
+            PermitApplicationAttachmentType.PaymentProof,
+            fileName,
+            contentType,
+            content);
+
+        application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.BankTransfer;
+        application.PaymentReferenceId = null;
+        application.PaymentRejectionComment = null;
+        application.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("SubmitPermitPaymentProof", "PermitApplication", applicationId.ToString(),
+            newValues: new { attachment.FileName, application.FeeAmount });
+
+        return MapPermitAttachmentDto(attachment);
+    }
+
+    public async Task<ApplicationPaymentDto> InitiatePromiseApplicationPaymentAsync(Guid userId, Guid applicationId)
+    {
+        var application = await GetOwnedPromiseApplicationAsync(userId, applicationId, includeAttachments: false);
+        EnsurePaymentCanBeInitiated(application.PaymentStatus);
+
+        var result = await _paymentGateway.InitiatePaymentAsync(
+            application.FeeAmount,
+            $"Opłata skarbowa — wniosek o promesę {application.Id}",
+            application.Id.ToString());
+
+        if (!result.Success || string.IsNullOrEmpty(result.PaymentId))
+            throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment initiation failed");
+
+        application.PaymentReferenceId = result.PaymentId;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
+        application.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("InitiatePromisePayment", "PromiseApplication", applicationId.ToString(),
+            newValues: new { result.PaymentId, application.FeeAmount });
+
+        return MapApplicationPaymentDto(application, result.PaymentUrl);
+    }
+
+    public async Task<ApplicationPaymentDto> ConfirmPromiseApplicationPaymentAsync(Guid userId, Guid applicationId, string paymentId)
+    {
+        var application = await GetOwnedPromiseApplicationAsync(userId, applicationId, includeAttachments: false);
+        await ConfirmApplicationPaymentAsync(application, paymentId, "PromiseApplication", "ConfirmPromisePayment");
+        return MapApplicationPaymentDto(application);
+    }
+
+    public async Task<PromiseApplicationAttachmentDto> UploadPromiseApplicationPaymentProofAsync(
+        Guid userId,
+        Guid applicationId,
+        string fileName,
+        string contentType,
+        byte[] content)
+    {
+        var application = await GetOwnedPromiseApplicationAsync(userId, applicationId, includeAttachments: true);
+        EnsurePaymentProofCanBeSubmitted(application.PaymentStatus);
+        ValidatePaymentProofContentType(contentType);
+        if (content.Length > 10 * 1024 * 1024)
+            throw new BusinessRuleViolationException("Payment proof file cannot exceed 10 MB");
+
+        var attachment = await ReplacePromiseAttachmentAsync(
+            application,
+            PromiseApplicationAttachmentType.PaymentProof,
+            fileName,
+            contentType,
+            content);
+
+        application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.BankTransfer;
+        application.PaymentReferenceId = null;
+        application.PaymentRejectionComment = null;
+        application.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync("SubmitPromisePaymentProof", "PromiseApplication", applicationId.ToString(),
+            newValues: new { attachment.FileName, application.FeeAmount });
+
+        return MapPromiseAttachmentDto(attachment);
     }
 
     public async Task<IList<CitizenMedicalAlertDto>> GetMyMedicalAlertsAsync(Guid userId)
@@ -728,6 +810,268 @@ public class CitizenService : ICitizenService
             oldValues: new { Status = FirearmStatus.Registered },
             newValues: new { Status = FirearmStatus.Lost, request.Description });
     }
+
+    private async Task<PermitApplication> GetOwnedPermitApplicationAsync(Guid userId, Guid applicationId, bool includeAttachments)
+    {
+        var citizen = await _context.CitizenProfiles
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        IQueryable<PermitApplication> query = _context.PermitApplications;
+        if (includeAttachments)
+            query = query.Include(pa => pa.Attachments);
+
+        return await query.FirstOrDefaultAsync(pa => pa.Id == applicationId && pa.CitizenId == citizen.Id)
+            ?? throw new NotFoundException("Permit application", applicationId);
+    }
+
+    private async Task<PromiseApplication> GetOwnedPromiseApplicationAsync(Guid userId, Guid applicationId, bool includeAttachments)
+    {
+        var citizen = await _context.CitizenProfiles
+            .FirstOrDefaultAsync(c => c.UserId == userId)
+            ?? throw new NotFoundException("Citizen profile not found");
+
+        IQueryable<PromiseApplication> query = _context.PromiseApplications;
+        if (includeAttachments)
+            query = query.Include(pa => pa.Attachments);
+
+        return await query.FirstOrDefaultAsync(pa => pa.Id == applicationId && pa.CitizenId == citizen.Id)
+            ?? throw new NotFoundException("Promise application", applicationId);
+    }
+
+    private static void EnsurePaymentCanBeInitiated(PaymentStatus paymentStatus)
+    {
+        if (paymentStatus is PaymentStatus.Paid or PaymentStatus.Submitted)
+            throw new BusinessRuleViolationException($"Payment cannot be initiated (current status: {paymentStatus})");
+    }
+
+    private static void EnsurePaymentProofCanBeSubmitted(PaymentStatus paymentStatus)
+    {
+        if (paymentStatus is PaymentStatus.Paid or PaymentStatus.Submitted)
+            throw new BusinessRuleViolationException($"Payment proof cannot be submitted (current status: {paymentStatus})");
+    }
+
+    private static void ValidatePaymentProofContentType(string contentType)
+    {
+        var allowed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
+        {
+            "application/pdf",
+            "image/jpeg",
+            "image/png"
+        };
+
+        if (!allowed.Contains(contentType))
+            throw new BusinessRuleViolationException("Only PDF, JPG and PNG files are allowed for payment proof");
+    }
+
+    private async Task ConfirmApplicationPaymentAsync(
+        PermitApplication application,
+        string paymentId,
+        string entityType,
+        string auditAction)
+    {
+        if (!string.Equals(application.PaymentReferenceId, paymentId, StringComparison.OrdinalIgnoreCase))
+            throw new BusinessRuleViolationException("Payment reference does not match this application");
+
+        if (application.PaymentStatus is PaymentStatus.Paid or PaymentStatus.Submitted)
+            throw new BusinessRuleViolationException($"Payment already processed (current status: {application.PaymentStatus})");
+
+        var result = await _paymentGateway.ConfirmPaymentAsync(paymentId);
+        if (!result.Success || !result.IsPaid)
+            throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment confirmation failed");
+
+        application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
+        application.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(auditAction, entityType, application.Id.ToString(),
+            newValues: new { paymentId, result.TransactionId, application.FeeAmount });
+    }
+
+    private async Task ConfirmApplicationPaymentAsync(
+        PromiseApplication application,
+        string paymentId,
+        string entityType,
+        string auditAction)
+    {
+        if (!string.Equals(application.PaymentReferenceId, paymentId, StringComparison.OrdinalIgnoreCase))
+            throw new BusinessRuleViolationException("Payment reference does not match this application");
+
+        if (application.PaymentStatus is PaymentStatus.Paid or PaymentStatus.Submitted)
+            throw new BusinessRuleViolationException($"Payment already processed (current status: {application.PaymentStatus})");
+
+        var result = await _paymentGateway.ConfirmPaymentAsync(paymentId);
+        if (!result.Success || !result.IsPaid)
+            throw new BusinessRuleViolationException(result.ErrorMessage ?? "Payment confirmation failed");
+
+        application.PaymentStatus = PaymentStatus.Submitted;
+        application.PaymentMethod = PaymentMethod.OnlineMock;
+        application.PaymentRejectionComment = null;
+        application.UpdatedAt = DateTime.UtcNow;
+        await _context.SaveChangesAsync();
+
+        await _auditService.LogAsync(auditAction, entityType, application.Id.ToString(),
+            newValues: new { paymentId, result.TransactionId, application.FeeAmount });
+    }
+
+    private async Task<PermitApplicationAttachment> ReplacePermitAttachmentAsync(
+        PermitApplication application,
+        PermitApplicationAttachmentType type,
+        string fileName,
+        string contentType,
+        byte[] content)
+    {
+        var existing = application.Attachments.FirstOrDefault(a => a.AttachmentType == type);
+        if (existing != null)
+        {
+            application.Attachments.Remove(existing);
+            _context.PermitApplicationAttachments.Remove(existing);
+        }
+
+        var attachment = new PermitApplicationAttachment
+        {
+            Id = Guid.NewGuid(),
+            PermitApplicationId = application.Id,
+            AttachmentType = type,
+            FileName = fileName,
+            ContentType = contentType,
+            FileSize = content.Length,
+            Content = content,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _context.PermitApplicationAttachments.AddAsync(attachment);
+        return attachment;
+    }
+
+    private async Task<PromiseApplicationAttachment> ReplacePromiseAttachmentAsync(
+        PromiseApplication application,
+        PromiseApplicationAttachmentType type,
+        string fileName,
+        string contentType,
+        byte[] content)
+    {
+        var existing = application.Attachments.FirstOrDefault(a => a.AttachmentType == type);
+        if (existing != null)
+        {
+            application.Attachments.Remove(existing);
+            _context.PromiseApplicationAttachments.Remove(existing);
+        }
+
+        var attachment = new PromiseApplicationAttachment
+        {
+            Id = Guid.NewGuid(),
+            PromiseApplicationId = application.Id,
+            AttachmentType = type,
+            FileName = fileName,
+            ContentType = contentType,
+            FileSize = content.Length,
+            Content = content,
+            CreatedAt = DateTime.UtcNow
+        };
+
+        await _context.PromiseApplicationAttachments.AddAsync(attachment);
+        return attachment;
+    }
+
+    private PermitApplicationDto MapPermitApplicationDto(PermitApplication pa) => new()
+    {
+        Id = pa.Id,
+        RequestedPermitType = pa.RequestedPermitType,
+        RequestedPermitTypeName = pa.RequestedPermitType.ToString(),
+        Reason = pa.Reason,
+        MedicalExamExpiryDate = _encryptionService.DecryptDate(pa.MedicalExamExpiryDateEncrypted),
+        PsychologicalExamExpiryDate = _encryptionService.DecryptDate(pa.PsychologicalExamExpiryDateEncrypted),
+        Status = pa.Status,
+        RejectionReason = pa.RejectionReason,
+        CorrectionNotes = pa.CorrectionNotes,
+        CreatedAt = pa.CreatedAt,
+        ReviewedAt = pa.ReviewedAt,
+        FeeAmount = pa.FeeAmount,
+        PaymentStatus = pa.PaymentStatus,
+        PaymentMethod = pa.PaymentMethod,
+        PaymentRejectionComment = pa.PaymentRejectionComment,
+        Attachments = pa.Attachments.Select(MapPermitAttachmentDto).ToList()
+    };
+
+    private static PermitApplicationAttachmentDto MapPermitAttachmentDto(PermitApplicationAttachment a) => new()
+    {
+        Id = a.Id,
+        AttachmentType = a.AttachmentType.ToString(),
+        AttachmentTypeName = a.AttachmentType.ToString(),
+        FileName = a.FileName,
+        ContentType = a.ContentType,
+        FileSize = a.FileSize,
+        CreatedAt = a.CreatedAt
+    };
+
+    private PromiseApplicationDto MapPromiseApplicationDto(PromiseApplication pa) =>
+        MapPromiseApplicationDto(pa, pa.Permit?.PermitNumber ?? string.Empty);
+
+    private static PromiseApplicationDto MapPromiseApplicationDto(PromiseApplication pa, string permitNumber) => new()
+    {
+        Id = pa.Id,
+        PermitId = pa.PermitId,
+        PermitNumber = permitNumber,
+        RequestedWeaponType = pa.RequestedWeaponType,
+        RequestedQuantity = pa.RequestedQuantity,
+        Status = pa.Status,
+        RejectionReason = pa.RejectionReason,
+        CorrectionNotes = pa.CorrectionNotes,
+        CreatedAt = pa.CreatedAt,
+        ReviewedAt = pa.ReviewedAt,
+        FeeAmount = pa.FeeAmount,
+        PaymentStatus = pa.PaymentStatus,
+        PaymentMethod = pa.PaymentMethod,
+        PaymentRejectionComment = pa.PaymentRejectionComment,
+        Attachments = pa.Attachments.Select(MapPromiseAttachmentDto).ToList()
+    };
+
+    private static PromiseApplicationAttachmentDto MapPromiseAttachmentDto(PromiseApplicationAttachment a) => new()
+    {
+        Id = a.Id,
+        AttachmentType = a.AttachmentType.ToString(),
+        AttachmentTypeName = a.AttachmentType.ToString(),
+        FileName = a.FileName,
+        ContentType = a.ContentType,
+        FileSize = a.FileSize,
+        CreatedAt = a.CreatedAt
+    };
+
+    private static ApplicationPaymentDto MapApplicationPaymentDto(PermitApplication application, string? paymentUrl = null) => new()
+    {
+        ApplicationId = application.Id,
+        FeeAmount = application.FeeAmount,
+        PaymentStatus = application.PaymentStatus,
+        PaymentMethod = application.PaymentMethod,
+        PaymentReferenceId = application.PaymentReferenceId,
+        PaymentUrl = paymentUrl,
+        PaymentRejectionComment = application.PaymentRejectionComment,
+        BankTransferDetails = BuildBankTransferDetails(application.Id, application.FeeAmount, "permit")
+    };
+
+    private static ApplicationPaymentDto MapApplicationPaymentDto(PromiseApplication application, string? paymentUrl = null) => new()
+    {
+        ApplicationId = application.Id,
+        FeeAmount = application.FeeAmount,
+        PaymentStatus = application.PaymentStatus,
+        PaymentMethod = application.PaymentMethod,
+        PaymentReferenceId = application.PaymentReferenceId,
+        PaymentUrl = paymentUrl,
+        PaymentRejectionComment = application.PaymentRejectionComment,
+        BankTransferDetails = BuildBankTransferDetails(application.Id, application.FeeAmount, "promise")
+    };
+
+    private static BankTransferDetailsDto BuildBankTransferDetails(Guid applicationId, decimal amount, string kind) => new()
+    {
+        AccountNumber = ApplicationPaymentBankDetails.AccountNumber,
+        AccountHolder = ApplicationPaymentBankDetails.AccountHolder,
+        BankName = ApplicationPaymentBankDetails.BankName,
+        TransferTitle = ApplicationPaymentBankDetails.BuildTransferTitle(applicationId, kind),
+        Amount = amount
+    };
 
     private static bool IsPermitValidForCategory(PermitType permitType, FirearmCategory category)
     {

@@ -19,6 +19,19 @@ public class PermitApplicationConfiguration : IEntityTypeConfiguration<PermitApp
         builder.Property(x => x.Status)
             .IsRequired();
 
+        builder.Property(x => x.FeeAmount)
+            .HasPrecision(10, 2)
+            .IsRequired();
+
+        builder.Property(x => x.PaymentStatus)
+            .IsRequired();
+
+        builder.Property(x => x.PaymentReferenceId)
+            .HasMaxLength(64);
+
+        builder.Property(x => x.PaymentRejectionComment)
+            .HasMaxLength(1000);
+
         builder.Property(x => x.RejectionReason)
             .HasMaxLength(1000);
 

@@ -21,6 +21,12 @@ public class WpaPermitApplicationDto
     public DateTime CreatedAt { get; set; }
     public DateTime? ReviewedAt { get; set; }
     public string? ReviewedByOfficerName { get; set; }
+    public decimal FeeAmount { get; set; }
+    public PaymentStatus PaymentStatus { get; set; }
+    public string PaymentStatusName => PaymentStatus.ToString();
+    public PaymentMethod? PaymentMethod { get; set; }
+    public string? PaymentMethodName => PaymentMethod?.ToString();
+    public string? PaymentReferenceId { get; set; }
     public IList<WpaPermitApplicationAttachmentDto> Attachments { get; set; } = new List<WpaPermitApplicationAttachmentDto>();
 }
 

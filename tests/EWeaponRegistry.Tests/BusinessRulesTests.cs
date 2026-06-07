@@ -2,6 +2,7 @@ using EWeaponRegistry.Application.DTOs.Citizen;
 using EWeaponRegistry.Application.DTOs.Shop;
 using EWeaponRegistry.Application.Exceptions;
 using EWeaponRegistry.Application.Interfaces;
+using EWeaponRegistry.Application.Interfaces.ExternalGateways;
 using EWeaponRegistry.Domain.Entities;
 using EWeaponRegistry.Domain.Enums;
 using EWeaponRegistry.Infrastructure.Data;
@@ -20,6 +21,7 @@ public class BusinessRulesTests : IDisposable
     private readonly AppDbContext _context;
     private readonly Mock<IEncryptionService> _encryptionMock;
     private readonly Mock<IAuditService> _auditMock;
+    private readonly Mock<IPaymentGateway> _paymentGatewayMock;
 
     public BusinessRulesTests()
     {
@@ -38,7 +40,11 @@ public class BusinessRulesTests : IDisposable
             .Returns<string>(s => string.IsNullOrEmpty(s) ? null : DateTime.Parse(s));
 
         _auditMock = new Mock<IAuditService>();
+        _paymentGatewayMock = new Mock<IPaymentGateway>();
     }
+
+    private CitizenService CreateCitizenService() =>
+        new(_context, _encryptionMock.Object, _auditMock.Object, _paymentGatewayMock.Object);
 
     public void Dispose() => _context.Dispose();
 
@@ -217,7 +223,7 @@ public class BusinessRulesTests : IDisposable
         var permit = CreatePermit(citizen.Id, maxFirearms: 2, usedSlots: 2);
         await _context.SaveChangesAsync();
 
-        var service = new CitizenService(_context, _encryptionMock.Object, _auditMock.Object);
+        var service = CreateCitizenService();
 
         var request = new CreatePromiseApplicationRequest
         {
@@ -243,7 +249,7 @@ public class BusinessRulesTests : IDisposable
         var permit = CreatePermit(citizen.Id, expired: true);
         await _context.SaveChangesAsync();
 
-        var service = new CitizenService(_context, _encryptionMock.Object, _auditMock.Object);
+        var service = CreateCitizenService();
 
         var request = new CreatePromiseApplicationRequest
         {
@@ -302,7 +308,7 @@ public class BusinessRulesTests : IDisposable
         _context.TransferRequests.Add(transferRequest);
         await _context.SaveChangesAsync();
 
-        var service = new CitizenService(_context, _encryptionMock.Object, _auditMock.Object);
+        var service = CreateCitizenService();
 
         // Act
         await service.AcceptTransferRequestAsync(buyerUserId, transferRequest.Id);

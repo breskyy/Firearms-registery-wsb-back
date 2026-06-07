@@ -37,6 +37,10 @@ public interface IWpaService
     Task ApprovePermitApplicationAsync(Guid officerId, Guid applicationId, ApprovePermitApplicationRequest request);
     Task RejectPermitApplicationAsync(Guid officerId, Guid applicationId, string? reason);
     Task RequirePermitApplicationCorrectionAsync(Guid officerId, Guid applicationId, string? notes);
+    Task VerifyPermitApplicationPaymentAsync(Guid officerId, Guid applicationId);
+    Task VerifyPromiseApplicationPaymentAsync(Guid officerId, Guid applicationId);
+    Task RejectPermitApplicationPaymentProofAsync(Guid officerId, Guid applicationId, string comment);
+    Task RejectPromiseApplicationPaymentProofAsync(Guid officerId, Guid applicationId, string comment);
 
     Task SuspendPermitAsync(Guid officerId, Guid permitId, string? reason);
     Task RevokePermitAsync(Guid officerId, Guid permitId, string? reason);
