@@ -92,3 +92,6 @@ docker-compose.override.yml
 # Publish output
 publish/
 Claude.md
+
+# AI / agent tooling (local only)
+.claude/
